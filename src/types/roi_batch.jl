@@ -126,7 +126,7 @@ batch_gpu = adapt(CuArray, batch)  # Transfer data to GPU
 
 # Example
 ```julia
-using SMLMData
+using SMLMCore
 using StaticArrays
 
 # Create camera

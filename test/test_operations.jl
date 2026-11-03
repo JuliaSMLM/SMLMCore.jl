@@ -1,4 +1,4 @@
-using SMLMData, Test
+using SMLMCore, Test
 
 @testset "SMLD Operations" begin
     # Setup helper function to create test data

@@ -1,18 +1,19 @@
 """
-    SMLMData
+    SMLMCore
 
 A Julia package for working with Single Molecule Localization Microscopy (SMLM) data.
+
+File io (SMITE) is in SMLMio, and SMLMData loads both SMLMCore and SMLMio.
 
 # Features
 - Type system for emitters, cameras, and localization data
 - Physical coordinate handling (microns) with camera pixel mappings
 - Filtering and ROI selection tools
-- SMITE format compatibility
 - Memory-efficient data structures
 
 # Basic Usage
 ```julia
-using SMLMData
+using SMLMCore
 
 # Create a camera
 cam = IdealCamera(1:512, 1:512, 0.1)  # 512x512 camera with 0.1 micron pixels
@@ -41,13 +42,10 @@ For a comprehensive overview of the API, use the help mode on `api`:
 Or access the complete API documentation programmatically:
 
 ```julia
-docs = SMLMData.api()
+docs = SMLMCore.api()
 ```
 """
-module SMLMData
-
-# External Packages
-using MAT
+module SMLMCore
 
 # Base imports
 import Base: filter
@@ -79,9 +77,7 @@ export
     ROIBatch,
 
     # SMLD types
-    BasicSMLD,
-    SmiteSMLD,
-    SmiteSMD
+    BasicSMLD
 
 # Coordinates and conversions
 export 
@@ -99,12 +95,6 @@ export
     emitter_ndims,
     cat_smld,
     merge_smld
-
-# SMITE functionality
-export
-    load_smite_2d,
-    load_smite_3d,
-    save_smite
 
 # Ecosystem abstract types for the (Config, Info, Data) tuple pattern
 """
@@ -132,10 +122,6 @@ include("types/smld.jl")      # Move from current location
 include("core/coordinates.jl") # Move from coordinates.jl
 include("core/filters.jl")    # Move from filters.jl
 include("core/operations.jl") # Move from operations.jl
-
-include("io/smite/types.jl")   # Move from smite/types.jl
-include("io/smite/loading.jl") # Move from smite/loading.jl
-include("io/smite/saving.jl")  # Move from smite/saving.jl
 
 # Include the API overview functionality
 include("api.jl")

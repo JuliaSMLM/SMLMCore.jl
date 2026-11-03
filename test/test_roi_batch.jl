@@ -1,5 +1,5 @@
 using Test
-using SMLMData
+using SMLMCore
 using StaticArrays
 using Adapt
 

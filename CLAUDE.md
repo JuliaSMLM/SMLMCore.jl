@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Package Overview
 
-SMLMData.jl is a Julia package for handling Single Molecule Localization Microscopy (SMLM) data. It provides types for representing fluorophore localizations, camera geometries, and complete SMLM datasets, along with tools for coordinate conversion, filtering, and I/O operations.
+SMLMCore.jl is a Julia package for handling Single Molecule Localization Microscopy (SMLM) data. It provides types for representing fluorophore localizations, camera geometries, and complete SMLM datasets, along with tools for coordinate conversion and filtering operations.
 
 ## Development Commands
 
@@ -40,14 +40,15 @@ julia --project=. -e 'using Pkg; Pkg.update()'
 ### Type Hierarchy
 - **Abstract Types**: `AbstractEmitter`, `AbstractCamera`, `SMLD` define interfaces
 - **Emitter Types**: `Emitter2D`, `Emitter3D`, `Emitter2DFit`, `Emitter3DFit` represent localizations
-- **Container Types**: `BasicSMLD`, `SmiteSMLD` store collections of emitters
+- **Container Types**: `BasicSMLD` stores collections of emitters
+- File io containers are in SMLMio.
 - **Camera Types**: `IdealCamera` defines pixel-to-physical coordinate mapping
 
 ### Core Modules
 1. **Coordinates** (`src/core/coordinates.jl`): Conversions between pixel and physical coordinates
 2. **Filters** (`src/core/filters.jl`): `@filter` macro and spatial/temporal selection functions
 3. **Operations** (`src/core/operations.jl`): Dataset concatenation and merging
-4. **I/O** (`src/io/smite/`): SMITE format support for MATLAB interoperability
+File io (SMITE) is in SMLMio.
 
 ### Key Design Patterns
 - All spatial coordinates are in microns
@@ -57,12 +58,12 @@ julia --project=. -e 'using Pkg; Pkg.update()'
 - Macro-based filtering syntax for intuitive API
 
 ### Testing Structure
-Tests are organized by component in separate files:
+Tests are organized into Core (`test/*.jl`) and QA (`test/qa/`) groups. Core tests are organized by component:
 - `test_emitters.jl`: Emitter type tests
 - `test_cameras.jl`: Camera and coordinate tests
 - `test_smld.jl`: Container type tests
 - `test_filters.jl`: Filtering functionality
 - `test_operations.jl`: Dataset operations
-- `test_smite.jl`: SMITE format I/O
+File io tests are in SMLMio.
 
-All tests use `@testset` blocks for organization and run via `runtests.jl`.
+All tests use `@testset` blocks for organization and run via `runtests.jl`. Core runs by default; use `GROUP=QA` for Aqua, ExplicitImports, and docstring checks.

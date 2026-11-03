@@ -1,4 +1,4 @@
-using SMLMData, Test
+using SMLMCore, Test
 
 @testset "Basic SMLD" begin
     @testset "Construction" begin

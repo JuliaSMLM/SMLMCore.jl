@@ -206,7 +206,7 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", smld::S) where {S<:AbstractSMLD}
     # Skip if a more specific method exists (to avoid method ambiguities)
-    if S <: BasicSMLD || S <: SmiteSMLD
+    if S <: BasicSMLD
         return
     end
     

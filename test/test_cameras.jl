@@ -1,4 +1,4 @@
-using SMLMData, Test
+using SMLMCore, Test
 
 @testset "Coordinate Conversion" begin
     @testset "Basic Conversions" begin

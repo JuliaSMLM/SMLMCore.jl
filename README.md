@@ -1,24 +1,27 @@
-# SMLMData
+# SMLMCore
 
 Data types and utilities for Single Molecule Localization Microscopy (SMLM) in Julia.
 
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaSMLM.github.io/SMLMData.jl/stable)
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaSMLM.github.io/SMLMData.jl/dev)
-[![Build Status](https://github.com/JuliaSMLM/SMLMData.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMData.jl/actions/workflows/CI.yml)
-[![Coverage](https://codecov.io/gh/JuliaSMLM/SMLMData.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/JuliaSMLM/SMLMData.jl)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaSMLM.github.io/SMLMCore.jl/stable)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaSMLM.github.io/SMLMCore.jl/dev)
+[![Build Status](https://github.com/JuliaSMLM/SMLMCore.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMCore.jl/actions/workflows/CI.yml)
+
+## Origin
+
+SMLMCore was split from SMLMData.jl 0.7.1 with its git history. SMLMData 0.7.2 and later loads SMLMCore and SMLMio and re-exports both, so existing code keeps working. New packages that need only the types depend on SMLMCore.
 
 ## Ecosystem Role
 
-SMLMData is the **core types package** for the [JuliaSMLM](https://github.com/JuliaSMLM) ecosystem. It defines the foundational types (emitters, cameras, SMLD containers) that all other packages share.
+SMLMCore is the **core types package** for the [JuliaSMLM](https://github.com/JuliaSMLM) ecosystem. It defines the foundational types (emitters, cameras, SMLD containers) that all other packages share.
 
-**You rarely need to import SMLMData directly.** Packages like `GaussMLE`, `SMLMBoxer`, and `SMLMAnalysis` depend on SMLMData and re-export the types you need. For example:
+**You rarely need to import SMLMCore directly.** Packages like `GaussMLE`, `SMLMBoxer`, and `SMLMAnalysis` depend on SMLMCore and re-export the types you need. For example:
 
 ```julia
 using GaussMLE  # Re-exports ROIBatch, camera types, etc.
-using SMLMAnalysis  # Re-exports all SMLMData types for analysis workflows
+using SMLMAnalysis  # Re-exports all SMLMCore types for analysis workflows
 ```
 
-Direct `using SMLMData` is primarily for:
+Direct `using SMLMCore` is primarily for:
 - Package developers building on the ecosystem
 - Standalone data manipulation without analysis packages
 - Learning the type system
@@ -26,7 +29,7 @@ Direct `using SMLMData` is primarily for:
 ## Quick Start
 
 ```julia
-using SMLMData
+using SMLMCore
 
 # Create a camera with 100nm pixels
 cam = IdealCamera(512, 512, 0.1)
@@ -52,7 +55,7 @@ roi = filter_roi(smld, 0.0:2.0, 1.0:3.0)
 
 ## Overview
 
-SMLMData provides a unified framework for handling Single Molecule Localization Microscopy data in Julia. The package enables efficient data manipulation, filtering, and analysis through a well-defined type system that handles both 2D and 3D localizations.
+SMLMCore provides a unified framework for handling Single Molecule Localization Microscopy data in Julia. The package enables efficient data manipulation, filtering, and analysis through a well-defined type system that handles both 2D and 3D localizations.
 
 ### Key Features
 
@@ -60,7 +63,7 @@ SMLMData provides a unified framework for handling Single Molecule Localization 
 - **Physical coordinate handling** with camera pixel mappings
 - **Filtering tools** for property-based and spatial selection
 - **Dataset operations** for merging and concatenation
-- **SMITE format** compatibility for MATLAB interoperability
+- File io (SMITE) is in SMLMio.
 - **Extensible design** for custom emitter types
 
 ## Type Hierarchy
@@ -81,20 +84,14 @@ ROI Batch Types
  └─ ROIBatch{T,N,A,C}
 
 AbstractSMLD
- ├─ BasicSMLD{T,E}
- └─ SmiteSMLD{T,E}
+ └─ BasicSMLD{T,E}
+ # Additional file io containers are in SMLMio.
  
 ```
 
 ## Common Workflows
 
-### Loading External Data
-
-```julia
-# Load from SMITE format (MATLAB)
-smd = SmiteSMD("path/to/data", "localizations.mat")
-smld_2d = load_smite_2d(smd)
-```
+File io (SMITE) is in SMLMio.
 
 ### Filtering and Analysis
 
@@ -125,7 +122,7 @@ merged = merge_smld([smld1, smld2], adjust_frames=true)
 
 ## Design Details
 
-SMLMData is built around three core abstract types that work together:
+SMLMCore is built around three core abstract types that work together:
 
 - **AbstractSMLD**: Container type holding a vector of emitters and camera information
 - **AbstractEmitter**: Base type for individual localizations
@@ -187,9 +184,9 @@ To create your own SMLD type:
 
 ```julia
 using Pkg
-Pkg.add("SMLMData")
+Pkg.add("SMLMCore")
 ```
 
 ## Documentation
 
-For detailed usage instructions, tutorials, and API reference, please visit the [official documentation](https://juliasmlm.github.io/SMLMData.jl/stable).
+For detailed usage instructions, tutorials, and API reference, please visit the [official documentation](https://juliasmlm.github.io/SMLMCore.jl/stable).

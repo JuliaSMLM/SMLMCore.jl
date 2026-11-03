@@ -115,7 +115,7 @@ New AbstractSMLD containing only emitters within the specified ROI
 
 # Dimension
 The emitters' dimension ([`emitter_ndims`](@ref)) picks the form: the 2D form needs dimension 2
-and the 3D form dimension 3, for SMLMData's emitter types and for emitter types from other
+and the 3D form dimension 3, for SMLMCore's emitter types and for emitter types from other
 packages alike. Empty data whose dimension is `nothing` give an empty result from either form.
 Otherwise an `ErrorException` is thrown: "2D ROI cannot be applied to 3D emitter type" (or its
 3D counterpart) for data of the other dimension, and "2D ROI cannot be applied to mixed 2D/3D
