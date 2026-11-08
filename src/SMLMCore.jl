@@ -33,22 +33,19 @@ bright = @filter(smld, photons > 1000)
 ```
 
 # API Overview
-For a comprehensive overview of the API, use the help mode on `api`:
+For a comprehensive overview of the API, use the help mode on `SMLMCore.api_overview`:
 
 ```julia
-?api
+?SMLMCore.api_overview
 ```
 
 Or access the complete API documentation programmatically:
 
 ```julia
-docs = SMLMCore.api()
+docs = SMLMCore.api_overview()
 ```
 """
 module SMLMCore
-
-# Base imports
-import Base: filter
 
 # Type definitions
 export

@@ -103,7 +103,7 @@ mutable struct ForeignEmitter3D{T} <: SMLMCore.AbstractEmitter
     x::T; y::T; z::T; photons::T; frame::Int; dataset::Int; track_id::Int; id::Int
 end
 
-# Mimics SykTrack's Localization: position in a tuple, x/y/z computed in getproperty,
+# An emitter with its position in a tuple, x/y/z computed in getproperty,
 # :z listed in propertynames only for N >= 3. No emitter_ndims method of its own.
 struct PropZLoc{N,T} <: SMLMCore.AbstractEmitter
     position::NTuple{N,T}

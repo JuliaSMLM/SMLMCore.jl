@@ -18,8 +18,7 @@ const PKG = getfield(@__MODULE__, PKGNAME)
 end
 
 @testset "ExplicitImports" begin
-    @test check_no_implicit_imports(PKG; ignore = (:StaticArrays, :SVector)) === nothing
-    # reason: src/types/roi_batch.jl uses StaticArrays implicitly, as SMLMData 0.7.1 did; step 1 of the split moves source unchanged, and the explicit import comes in step 2
+    @test check_no_implicit_imports(PKG) === nothing
     @test check_no_stale_explicit_imports(PKG) === nothing
     # Opt-out: ignore named items and state the reason, e.g.
     #   check_no_implicit_imports(PKG; ignore=(:Foo,))

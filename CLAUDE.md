@@ -63,8 +63,7 @@ Tests are organized into Core (`test/*.jl`) and QA (`test/qa/`) groups. Core tes
 - `test_cameras.jl`: Camera and coordinate tests
 - `test_smld.jl`: Container type tests
 - `test_filters.jl`: Filtering functionality
-- `test_operations.jl`: Dataset operations
-- `test_smite.jl`: also cat_smld and merge_smld (named for SMITE, but tests no file io)
+- `test_operations.jl`: Dataset operations (cat_smld, merge_smld)
 File io tests are in SMLMio.
 
 All tests use `@testset` blocks for organization and run via `runtests.jl`. Core runs by default; use `GROUP=QA` for Aqua, ExplicitImports, and docstring checks.

@@ -79,6 +79,14 @@ using SMLMCore, Test
             empty_smld = BasicSMLD(empty_emitters, cam, 0, 1, Dict{String,Any}())
             result = cat_smld([smld, empty_smld])
             @test length(result.emitters) == 1
+
+            # Varargs form with an empty SMLD; n_frames of a single SMLD
+            smld2 = create_test_smld(1:2)
+            result = cat_smld(smld2, empty_smld)
+            @test length(result.emitters) == 2
+            result = cat_smld([smld2])
+            @test length(result.emitters) == 2
+            @test result.n_frames == 2
         end
     end
 

@@ -6,7 +6,7 @@ the JuliaSMLM ecosystem, enabling interoperability between SMLMBoxer, GaussMLE,
 and other analysis packages.
 """
 
-using StaticArrays
+using StaticArrays: SVector
 import Adapt
 
 """
