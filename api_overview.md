@@ -383,11 +383,15 @@ combined = cat_smld([smld1, smld2, smld3])
 merged = merge_smld(smld1, smld2)
 merged = merge_smld([smld1, smld2, smld3])
 
-# Merge with sequential frame numbers
-sequential = merge_smld([smld1, smld2, smld3], adjust_frames=true)
+# Merge with each input's frames placed after the earlier inputs' frames
+by_frame = merge_smld([smld1, smld2, smld3], adjust_frames=true)
 
-# Merge with sequential dataset numbers
-sequential_ds = merge_smld([smld1, smld2, smld3], adjust_datasets=true)
+# Merge with each input's datasets placed after the earlier inputs' datasets
+by_dataset = merge_smld([smld1, smld2, smld3], adjust_datasets=true)
+
+# Renumbering moves each input by the earlier inputs' total n_frames (n_datasets); the inputs
+# themselves are not modified. Both functions require the same camera (same type, pixels and
+# calibration) and the same emitter type.
 ```
 
 File io (SMITE) is in SMLMio.
@@ -449,7 +453,7 @@ frames_1_10 = filter_frames(roi, 1:10)
 bright1 = @filter(smld1, photons > 1000)
 bright2 = @filter(smld2, photons > 1000)
 
-# Merge datasets with sequential frame numbering
+# Merge datasets, placing the second one's frames after the first one's
 merged = merge_smld([bright1, bright2], adjust_frames=true)
 
 # Process the merged dataset

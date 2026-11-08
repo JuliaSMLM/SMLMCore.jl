@@ -109,7 +109,7 @@ first_10_frames = filter_frames(smld, 1:10)
 ### Combining Datasets
 
 ```julia
-# Merge datasets with sequential frame numbering
+# Merge datasets, placing the second one's frames after the first one's
 merged = merge_smld([smld1, smld2], adjust_frames=true)
 ```
 

@@ -368,7 +368,7 @@ early_frames = filter_frames(smld, 1:10)
 # Concatenate two SMLD objects
 combined = cat_smld(smld1, smld2)
 
-# Merge with sequential frame numbering
+# Merge, placing the second one's frames after the first one's
 merged = merge_smld([smld1, smld2], adjust_frames=true)
 ```
 
