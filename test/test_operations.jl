@@ -236,8 +236,10 @@ end
                 "Cannot concatenate SMLDs with different cameras: input 2's camera differs from input 1's in fields gain, qe"
             @test occursin("in field readnoise", errmsg(() -> cat_smld(s_map, s_scalar)))
             s_ideal = BasicSMLD(em, IdealCamera(1:16, 1:16, 0.1), 1, 1, Dict{String,Any}())
-            @test occursin("input 2's camera differs from input 1's in type (IdealCamera",
-                errmsg(() -> merge_smld(s_map, s_ideal)))
+            # (a type prints with or without its module, depending on where the test runs)
+            msg = errmsg(() -> merge_smld(s_map, s_ideal))
+            @test occursin("input 2's camera differs from input 1's in type (", msg)
+            @test occursin(r"\(\S*IdealCamera\{Float64\}, not \S*SCMOSCamera\{Float64\}\)$", msg)
 
             # Calibration held in a struct, and a tuple of cameras, compare by value
             cc(g) = CalibratedTestCamera([0.0, 0.1], [0.0, 0.1], TestCalibration(fill(g, 1, 1)))
