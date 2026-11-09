@@ -223,6 +223,22 @@ end
             s_uniform = BasicSMLD(em, SCMOSCamera(16, 16, 0.1, fill(1.5, 16, 16)), 1, 1, Dict{String,Any}())
             @test_throws ErrorException merge_smld(s_scalar, s_uniform)
 
+            # The error names the input and the fields that differ, or the two camera types
+            errmsg(f) = try
+                f(); ""
+            catch e
+                e isa ErrorException ? e.msg : string(typeof(e))
+            end
+            s_gq = BasicSMLD(em, SCMOSCamera(16, 16, 0.1, rn; gain = 0.5, qe = 0.9), 1, 1, Dict{String,Any}())
+            @test errmsg(() -> merge_smld(s_map, s_map2, s_gain)) ==
+                "Cannot merge SMLDs with different cameras: input 3's camera differs from input 1's in field gain"
+            @test errmsg(() -> cat_smld(s_map, s_gq)) ==
+                "Cannot concatenate SMLDs with different cameras: input 2's camera differs from input 1's in fields gain, qe"
+            @test occursin("in field readnoise", errmsg(() -> cat_smld(s_map, s_scalar)))
+            s_ideal = BasicSMLD(em, IdealCamera(1:16, 1:16, 0.1), 1, 1, Dict{String,Any}())
+            @test occursin("input 2's camera differs from input 1's in type (IdealCamera",
+                errmsg(() -> merge_smld(s_map, s_ideal)))
+
             # Calibration held in a struct, and a tuple of cameras, compare by value
             cc(g) = CalibratedTestCamera([0.0, 0.1], [0.0, 0.1], TestCalibration(fill(g, 1, 1)))
             @test SMLMCore.is_same_camera(cc(2.0), cc(2.0))
@@ -444,76 +460,88 @@ end
             cam = IdealCamera(1:16, 1:16, 0.1)
             mk_int(nf) = BasicSMLD([Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0,
                 frame=1)], cam, nf, 1, Dict{String,Any}())
-            # Immutable emitters, with Int32 frame and dataset fields
-            mkimm(fd, nf, nd) = BasicSMLD([ImmutableTestEmitter(1.0, 2.0, f, d) for (f, d) in fd],
-                cam, nf, nd, Dict{String,Any}())
-            m = merge_smld(mkimm([(1, 1)], 5, 2), mkimm([(1, 1), (3, 2)], 5, 2);
-                adjust_frames=true, adjust_datasets=true)
-            @test [(e.frame, e.dataset) for e in m.emitters] == [(1, 1), (6, 3), (8, 4)]
-            @test eltype(m.emitters) == ImmutableTestEmitter
-            # frame and dataset as properties only: copied, then set through the properties
-            p1 = BasicSMLD([PropertyTestEmitter(1.0, 2.0, 1, 1)], cam, 4, 1, Dict{String,Any}())
-            p2 = BasicSMLD([PropertyTestEmitter(1.0, 2.0, 2, 1)], cam, 4, 1, Dict{String,Any}())
-            m = merge_smld(p1, p2; adjust_frames=true, adjust_datasets=true)
-            @test [(e.frame, e.dataset) for e in m.emitters] == [(1, 1), (6, 2)]
-            @test (p2.emitters[1].frame, p2.emitters[1].dataset) == (2, 1)
-
-            # Only the requested numbers are read or written
             sm(v, nf) = BasicSMLD(v, cam, nf, 1, Dict{String,Any}())
-            m = merge_smld(sm([FrameOnlyMutable(1.0, 1)], 10), sm([FrameOnlyMutable(1.0, 2)], 10); adjust_frames=true)
-            @test [e.frame for e in m.emitters] == [1, 12]
-            m = merge_smld(sm([FrameOnlyImmutable(1.0, 1)], 10), sm([FrameOnlyImmutable(1.0, 2)], 10); adjust_frames=true)
-            @test [e.frame for e in m.emitters] == [1, 12]
-            @test_throws ArgumentError merge_smld(sm([FrameOnlyImmutable(1.0, 1)], 10),
-                sm([FrameOnlyImmutable(1.0, 2)], 10); adjust_datasets=true)
-            m = merge_smld(sm([MaybeDatasetEmitter(1, nothing)], 10), sm([MaybeDatasetEmitter(2, nothing)], 10);
-                adjust_frames=true)
-            @test [(e.frame, e.dataset) for e in m.emitters] == [(1, nothing), (12, nothing)]
+            # Each case is its own testset, so an error in one does not skip the others
+            @testset "Immutable emitters, Int32 numbers" begin
+                mkimm(fd, nf, nd) = BasicSMLD([ImmutableTestEmitter(1.0, 2.0, f, d) for (f, d) in fd],
+                    cam, nf, nd, Dict{String,Any}())
+                m = merge_smld(mkimm([(1, 1)], 5, 2), mkimm([(1, 1), (3, 2)], 5, 2);
+                    adjust_frames=true, adjust_datasets=true)
+                @test [(e.frame, e.dataset) for e in m.emitters] == [(1, 1), (6, 3), (8, 4)]
+                @test eltype(m.emitters) == ImmutableTestEmitter
+            end
+            @testset "Numbers as properties only" begin
+                # copied, then set through the properties
+                p1 = BasicSMLD([PropertyTestEmitter(1.0, 2.0, 1, 1)], cam, 4, 1, Dict{String,Any}())
+                p2 = BasicSMLD([PropertyTestEmitter(1.0, 2.0, 2, 1)], cam, 4, 1, Dict{String,Any}())
+                m = merge_smld(p1, p2; adjust_frames=true, adjust_datasets=true)
+                @test [(e.frame, e.dataset) for e in m.emitters] == [(1, 1), (6, 2)]
+                @test (p2.emitters[1].frame, p2.emitters[1].dataset) == (2, 1)
+            end
 
-            # A type's own setter runs, so a derived field stays in step
-            t2 = TimedTestEmitter(2, 1, 0.02)
-            m = merge_smld(sm([TimedTestEmitter(1, 1, 0.01)], 10), sm([t2], 10); adjust_frames=true)
-            @test (m.emitters[2].frame, m.emitters[2].t) == (12, 0.12)
-            @test (t2.frame, t2.t) == (2, 0.02)
+            @testset "Only the requested numbers are read or written" begin
+                m = merge_smld(sm([FrameOnlyMutable(1.0, 1)], 10), sm([FrameOnlyMutable(1.0, 2)], 10); adjust_frames=true)
+                @test [e.frame for e in m.emitters] == [1, 12]
+                m = merge_smld(sm([FrameOnlyImmutable(1.0, 1)], 10), sm([FrameOnlyImmutable(1.0, 2)], 10); adjust_frames=true)
+                @test [e.frame for e in m.emitters] == [1, 12]
+                @test_throws ArgumentError merge_smld(sm([FrameOnlyImmutable(1.0, 1)], 10),
+                    sm([FrameOnlyImmutable(1.0, 2)], 10); adjust_datasets=true)
+                m = merge_smld(sm([MaybeDatasetEmitter(1, nothing)], 10), sm([MaybeDatasetEmitter(2, nothing)], 10);
+                    adjust_frames=true)
+                @test [(e.frame, e.dataset) for e in m.emitters] == [(1, nothing), (12, nothing)]
+            end
 
-            # A field left undefined is copied by deepcopy; a defined object field stays shared
-            m = merge_smld(sm([ExtraTestEmitter(1, 1)], 10), sm([ExtraTestEmitter(2, 1)], 10); adjust_frames=true)
-            @test m.emitters[2].frame == 12 && !isdefined(m.emitters[2], :extra)
-            v = [1.0]
-            in2 = ExtraTestEmitter(2, 1, v)
-            m = merge_smld(sm([ExtraTestEmitter(1, 1, [0.0])], 10), sm([in2], 10); adjust_frames=true)
-            @test m.emitters[2].frame == 12 && m.emitters[2].extra === v && in2.frame == 2
+            @testset "A type's own setter runs" begin
+                # so a derived field stays in step
+                t2 = TimedTestEmitter(2, 1, 0.02)
+                m = merge_smld(sm([TimedTestEmitter(1, 1, 0.01)], 10), sm([t2], 10); adjust_frames=true)
+                @test (m.emitters[2].frame, m.emitters[2].t) == (12, 0.12)
+                @test (t2.frame, t2.t) == (2, 0.02)
+            end
 
-            # An input vector of abstract element type renumbers the same way
-            ab = AbstractSMLD[mk_int(10), mk_int(10)]
-            @test [e.frame for e in merge_smld(ab; adjust_frames=true).emitters] == [1, 11]
+            @testset "Mutable emitter with a field left undefined" begin
+                # copied by deepcopy; a defined object field stays shared
+                m = merge_smld(sm([ExtraTestEmitter(1, 1)], 10), sm([ExtraTestEmitter(2, 1)], 10); adjust_frames=true)
+                @test m.emitters[2].frame == 12 && !isdefined(m.emitters[2], :extra)
+                v = [1.0]
+                in2 = ExtraTestEmitter(2, 1, v)
+                m = merge_smld(sm([ExtraTestEmitter(1, 1, [0.0])], 10), sm([in2], 10); adjust_frames=true)
+                @test m.emitters[2].frame == 12 && m.emitters[2].extra === v && in2.frame == 2
+            end
 
-            # An immutable emitter's number with no move is not read: dataset = nothing
-            im1 = sm([ImmutableMaybeDataset(1, nothing)], 10)
-            m = merge_smld(im1, sm([ImmutableMaybeDataset(2, nothing)], 10); adjust_frames=true)
-            @test [(e.frame, e.dataset) for e in m.emitters] == [(1, nothing), (12, nothing)]
+            @testset "Input vector of abstract element type" begin
+                ab = AbstractSMLD[mk_int(10), mk_int(10)]
+                @test [e.frame for e in merge_smld(ab; adjust_frames=true).emitters] == [1, 11]
+            end
 
-            # An immutable emitter with a trailing field left unset keeps it unset; one that is set
-            # stays shared with the input
-            m = merge_smld(sm([ImmutableExtraEmitter(1, 1)], 10), sm([ImmutableExtraEmitter(2, 1)], 10);
-                adjust_frames=true, adjust_datasets=true)
-            @test (m.emitters[2].frame, m.emitters[2].dataset) == (12, 2)
-            @test !isdefined(m.emitters[2], :extra)
-            v = [1.0]
-            m = merge_smld(sm([ImmutableExtraEmitter(1, 1, [0.0])], 10), sm([ImmutableExtraEmitter(2, 1, v)], 10);
-                adjust_frames=true)
-            @test m.emitters[2].frame == 12 && m.emitters[2].extra === v
-            # A move of a number the emitter leaves unset throws; a set one moves
-            @test_throws ArgumentError merge_smld(sm([LateNumbersEmitter([0.0], 1, 1)], 10),
-                sm([LateNumbersEmitter()], 10); adjust_frames=true)
-            @test_throws ArgumentError merge_smld(sm([LateNumbersEmitter([0.0], 1, 1)], 10),
-                sm([LateNumbersEmitter()], 10); adjust_datasets=true)
-            m = merge_smld(sm([LateNumbersEmitter([0.0], 1, 1)], 10), sm([LateNumbersEmitter([0.0], 2, 1)], 10);
-                adjust_frames=true, adjust_datasets=true)
-            @test (m.emitters[2].frame, m.emitters[2].dataset) == (12, 2)
+            @testset "Immutable emitter, number with no move not read" begin
+                # dataset = nothing
+                im1 = sm([ImmutableMaybeDataset(1, nothing)], 10)
+                m = merge_smld(im1, sm([ImmutableMaybeDataset(2, nothing)], 10); adjust_frames=true)
+                @test [(e.frame, e.dataset) for e in m.emitters] == [(1, nothing), (12, nothing)]
+            end
 
-            # SMLD types whose counts are Int32 or UInt, with three inputs
-            for C in (Int32, UInt)
+            @testset "Immutable emitter with fields left unset" begin
+                # a trailing field left unset stays unset; one that is set stays shared with the input
+                m = merge_smld(sm([ImmutableExtraEmitter(1, 1)], 10), sm([ImmutableExtraEmitter(2, 1)], 10);
+                    adjust_frames=true, adjust_datasets=true)
+                @test (m.emitters[2].frame, m.emitters[2].dataset) == (12, 2)
+                @test !isdefined(m.emitters[2], :extra)
+                v = [1.0]
+                m = merge_smld(sm([ImmutableExtraEmitter(1, 1, [0.0])], 10), sm([ImmutableExtraEmitter(2, 1, v)], 10);
+                    adjust_frames=true)
+                @test m.emitters[2].frame == 12 && m.emitters[2].extra === v
+                # A move of a number the emitter leaves unset throws; a set one moves
+                @test_throws ArgumentError merge_smld(sm([LateNumbersEmitter([0.0], 1, 1)], 10),
+                    sm([LateNumbersEmitter()], 10); adjust_frames=true)
+                @test_throws ArgumentError merge_smld(sm([LateNumbersEmitter([0.0], 1, 1)], 10),
+                    sm([LateNumbersEmitter()], 10); adjust_datasets=true)
+                m = merge_smld(sm([LateNumbersEmitter([0.0], 1, 1)], 10), sm([LateNumbersEmitter([0.0], 2, 1)], 10);
+                    adjust_frames=true, adjust_datasets=true)
+                @test (m.emitters[2].frame, m.emitters[2].dataset) == (12, 2)
+            end
+
+            @testset "SMLD counts of type $C, three inputs" for C in (Int32, UInt)
                 sc(f) = CountTestSMLD([Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0,
                     frame=f)], cam, C(10), C(1), Dict{String,Any}())
                 m = merge_smld(sc(1), sc(2), sc(3); adjust_frames=true, adjust_datasets=true)

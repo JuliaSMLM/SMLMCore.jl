@@ -14,7 +14,9 @@ New AbstractSMLD containing all emitters from inputs
 - Camera must be identical across all SMLDs: the same type and equal values in every field,
   calibration included. Numbers, arrays, dictionaries, tuples, immutable structs and wrapped
   cameras compare by value (NaN equals NaN); any other object in a camera field compares with
-  its own `==`, which for a mutable struct without a `==` method means the same object
+  its own `==`, which for a mutable struct without a `==` method means the same object. A
+  plain-bits field that a camera's constructor leaves unset holds whatever was in memory, so it
+  can make two otherwise equal cameras differ. The error names the input and the fields that differ
 - All inputs must hold the same emitter type
 - n_frames is set to the largest `n_frames` of the inputs
 - n_datasets is set to the largest `n_datasets` of the inputs
@@ -41,10 +43,10 @@ function cat_smld(smlds::Vector{<:AbstractSMLD})
 
     # At this point we know we have at least 2 SMLDs
     ref_camera = smlds[1].camera
-    for smld in smlds[2:end]
-        if !is_same_camera(ref_camera, smld.camera)
-            error("Cannot concatenate SMLDs with different cameras")
-        end
+    for k in 2:length(smlds)
+        is_same_camera(ref_camera, smlds[k].camera) ||
+            error("Cannot concatenate SMLDs with different cameras: ",
+                _camera_difference(k, ref_camera, smlds[k].camera))
     end
 
     # Concatenate emitters
@@ -90,7 +92,9 @@ New AbstractSMLD containing all emitters with adjusted numbering if requested
   calibration included (a scalar calibration and a uniform map of the same value differ).
   Numbers, arrays, dictionaries, tuples, immutable structs and wrapped cameras compare by value
   (NaN equals NaN); any other object in a camera field compares with its own `==`, which for a
-  mutable struct without a `==` method means the same object
+  mutable struct without a `==` method means the same object. A plain-bits field that a camera's
+  constructor leaves unset holds whatever was in memory, so it can make two otherwise equal
+  cameras differ. The error names the input and the fields that differ
 - All inputs must hold the same emitter type
 - When adjust_frames=true, each input's frame numbers move by the sum of the earlier inputs'
   `n_frames`, and the result's `n_frames` is that sum over all inputs
@@ -129,8 +133,10 @@ function merge_smld(smlds::Vector{<:AbstractSMLD};
     length(smlds) == 1 && return first(smlds)
 
     # Check camera compatibility
-    if !all(is_same_camera(smlds[1].camera, smld.camera) for smld in smlds[2:end])
-        error("Cannot merge SMLDs with different cameras")
+    for k in 2:length(smlds)
+        is_same_camera(smlds[1].camera, smlds[k].camera) ||
+            error("Cannot merge SMLDs with different cameras: ",
+                _camera_difference(k, smlds[1].camera, smlds[k].camera))
     end
 
     # The first input keeps its numbers. Each later input moves by the earlier inputs' total
@@ -257,6 +263,22 @@ end
 is_same_camera(cam1::AbstractCamera, cam2::AbstractCamera) =
     cam1 === cam2 ||
     (typeof(cam1) === typeof(cam2) && _same_value(cam1, cam2, IdDict{Any,Nothing}()))
+
+# For the error when input k's camera is not the first input's: the two types, or the fields
+# whose values differ (each field compared on its own by the rule above).
+function _camera_difference(k::Integer, a::AbstractCamera, b::AbstractCamera)
+    head = string("input ", k, "'s camera differs from input 1's in ")
+    typeof(a) === typeof(b) || return string(head, "type (", typeof(b), ", not ", typeof(a), ")")
+    names = String[]
+    for i in 1:fieldcount(typeof(a))
+        da = isdefined(a, i)
+        same = da == isdefined(b, i) &&
+            (!da || _same_value(getfield(a, i), getfield(b, i), IdDict{Any,Nothing}()))
+        same || push!(names, string(fieldname(typeof(a), i)))
+    end
+    isempty(names) && return string(head, "its values")
+    return string(head, length(names) == 1 ? "field " : "fields ", join(names, ", "))
+end
 function _same_value(a, b, seen)
     a === b && return true
     a isa Number && b isa Number && return _same_number(a, b)
