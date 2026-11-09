@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Split SMLMCore from SMLMData.jl 0.7.1 with its git history. Core types and operations stay here; file io (SMITE) moves to SMLMio. SMLMData 0.7.2 and later loads SMLMCore and SMLMio and re-exports both. Apart from the fixes below, behavior is that of SMLMData 0.7.1.
+- Requires Julia 1.10 or later, the current long-term-support release (SMLMData 0.7.1 allowed Julia 1.9).
 
 ### Fixed
 - `merge_smld` with `adjust_frames` or `adjust_datasets` no longer changes the frame and dataset numbers of the input emitters (they were shared with the result and renumbered in place, so a second merge shifted them again, and an emitter listed twice in one input was shifted twice). Each renumbered entry is now a new emitter with only the requested numbers changed: a mutable emitter is copied field by field and set through `setproperty!` (fields holding arrays or other objects stay shared with the input; an emitter with a field left undefined is deep-copied instead), and an immutable emitter is rebuilt from its fields without calling its constructor (fields its constructor left unset stay unset). Immutable emitter types, including ones with a `frame` field and no `dataset` field, can now be renumbered.
