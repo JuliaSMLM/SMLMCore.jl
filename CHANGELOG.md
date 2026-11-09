@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `merge_smld` with `adjust_datasets` moves each input's datasets by the earlier inputs' total `n_datasets` and sets `n_datasets` to the total. It moved each input by 1 and set `n_datasets` to the number of inputs, so inputs holding several datasets shared dataset numbers.
 - `cat_smld` and `merge_smld` treat two cameras as the same only when every field is equal, calibration included. Two sCMOS cameras with the same pixels but different offset, gain, read noise or QE were accepted as one camera, and the result kept the first camera's calibration. A call that merged such cameras now throws; so does one that merges a scalar calibration with a uniform map of the same value. Numbers, arrays, dictionaries, tuples, immutable structs and wrapped cameras compare by value (NaN equals NaN, -0.0 equals 0.0); any other object in a camera field, such as a mutable handle, compares with its own `==`, so a camera type that holds one merges with a separately built copy only if that object's type defines `==`. A camera type without `pixel_edges_x` and `pixel_edges_y` fields (a camera that wraps another) made `cat_smld` and `merge_smld` throw a FieldError; it is now compared like any other.
 
-## [0.4.0] - 2025-01-13
+## SMLMData.jl [0.4.0] - 2025-01-13
 
 ### Added
 - **SCMOSCamera type** for sCMOS camera support with pixel-dependent calibration parameters
@@ -46,9 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IdealCamera remains the default for Poisson-only noise models
 - SCMOSCamera designed for compatibility with future SMLMCamera.jl calibration package
 
-## [0.3.1] - Previous releases
+## SMLMData.jl [0.3.1] - Previous releases
 
 See git history for earlier changes.
 
-[Unreleased]: https://github.com/JuliaSMLM/SMLMCore.jl/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/JuliaSMLM/SMLMCore.jl/releases/tag/v0.4.0
+[Unreleased]: https://github.com/JuliaSMLM/SMLMCore.jl/commits/main
+[0.4.0]: https://github.com/JuliaSMLM/SMLMData.jl/releases/tag/v0.4.0
