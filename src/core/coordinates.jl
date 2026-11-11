@@ -31,38 +31,23 @@ px, py = physical_to_pixel(0.05, 0.05, 0.1)  # Point 0.05,0.05 microns from orig
 ```
 """
 function physical_to_pixel(x::Real, y::Real, pixel_size::Real)
-    # Convert from physical units to pixel coordinates
-    # Add 0.5 to make (0,0) physical correspond to (0.5,0.5) pixel
-    px = (x / pixel_size) + 0.5
-    py = (y / pixel_size) + 0.5
-    
-    return (px, py)
+    # (0, 0) µm is the top-left corner of pixel (1, 1), at pixel coordinate (0.5, 0.5). The
+    # half is converted to the quotient's type so a Float32 input gives a Float32 result.
+    px = x / pixel_size
+    py = y / pixel_size
+    return (px + oftype(px, 0.5), py + oftype(py, 0.5))
 end
 
 """
-    physical_to_pixel_index(x::Real, y::Real, pixel_size::Real)
+    physical_to_pixel_index(x::Real, y::Real, pixel_size::Real) -> (px, py)
 
-Convert physical coordinates (in microns) to integer pixel indices.
-Returns the pixel that contains the given physical coordinate.
-
-# Arguments
-- `x::Real`: x coordinate in microns (0,0 is top-left of image)
-- `y::Real`: y coordinate in microns (0,0 is top-left of image)
-- `pixel_size::Real`: size of a pixel in microns
-
-# Returns
-Tuple{Int, Int}: (px,py) pixel indices where (1,1) is top-left pixel
-
-# Example
-```julia
-# For a camera with 0.1 micron pixels
-px, py = physical_to_pixel_index(0.05, 0.05, 0.1)  # Point at center of first pixel
-# Returns (1, 1)
-```
+Return the 1-based (column, row) index of the pixel whose half-open interval
+`[(i-1)·pixel_size, i·pixel_size)` contains the position, for square pixels with the camera's
+edges starting at 0. A position outside the camera gives an index outside `1:N`; the function
+does not check bounds.
 """
 function physical_to_pixel_index(x::Real, y::Real, pixel_size::Real)
-    px, py = physical_to_pixel(x, y, pixel_size)
-    return (round(Int, px), round(Int, py))
+    return (floor(Int, x / pixel_size) + 1, floor(Int, y / pixel_size) + 1)
 end
 
 """

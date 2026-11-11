@@ -578,9 +578,46 @@ end
             
             # Should error on different cameras
             @test_throws ErrorException merge_smld(smld1, smld2)
-            
+
             # Test empty input
             @test_throws ErrorException merge_smld(SMLD[])
         end
+    end
+
+    @testset "One input gives a new SMLD with the usual metadata" begin
+        s = create_test_smld(1:3)
+        s.metadata["sample"] = "A"
+        keys_before = sort(collect(keys(s.metadata)))
+
+        for c in (cat_smld([s]), cat_smld(s))
+            @test c !== s
+            @test c isa typeof(s)
+            @test c.emitters == s.emitters && c.emitters !== s.emitters
+            @test c.camera === s.camera
+            @test (c.n_frames, c.n_datasets) == (s.n_frames, s.n_datasets)
+            @test c.metadata["concatenated_from"] == 1
+            @test c.metadata["sample"] == "A"
+        end
+
+        for m in (merge_smld([s]), merge_smld(s))
+            @test m !== s
+            @test m.emitters == s.emitters && m.emitters !== s.emitters
+            @test m.metadata["merged_from"] == 1
+            @test m.metadata["frame_adjustment"] == false
+            @test m.metadata["dataset_adjustment"] == false
+        end
+        m = merge_smld([s]; adjust_frames = true, adjust_datasets = true)
+        @test m !== s
+        @test m.metadata["frame_adjustment"] == true
+        @test m.metadata["dataset_adjustment"] == true
+        @test (m.n_frames, m.n_datasets) == (s.n_frames, s.n_datasets)
+        @test [e.frame for e in m.emitters] == [e.frame for e in s.emitters]
+
+        # The input is unchanged: no metadata key added, and growing the result's emitter
+        # vector does not grow the input's
+        @test sort(collect(keys(s.metadata))) == keys_before
+        c = cat_smld([s])
+        push!(c.emitters, Emitter2DFit{Float64}(9.0, 9.0, 1.0, 1.0, 0.1, 0.1, 1.0, 1.0))
+        @test length(s.emitters) == 3
     end
 end

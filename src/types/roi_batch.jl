@@ -165,11 +165,14 @@ struct ROIBatch{T,N,A<:AbstractArray{T,N},C<:AbstractCamera}
         n_rois = size(data, 3)
         roi_size = size(data, 1)
 
-        # Validation
-        @assert size(data, 1) == size(data, 2) "ROIs must be square (got $(size(data, 1))×$(size(data, 2)))"
-        @assert length(x_corners) == n_rois "Must have one x_corner per ROI (got $(length(x_corners)) for $n_rois ROIs)"
-        @assert length(y_corners) == n_rois "Must have one y_corner per ROI (got $(length(y_corners)) for $n_rois ROIs)"
-        @assert length(frame_indices) == n_rois "Must have one frame index per ROI (got $(length(frame_indices)) for $n_rois ROIs)"
+        size(data, 1) == size(data, 2) || throw(ArgumentError(
+            "ROIs must be square (got $(size(data, 1))×$(size(data, 2)))"))
+        length(x_corners) == n_rois || throw(DimensionMismatch(
+            "Must have one x_corner per ROI (got $(length(x_corners)) for $n_rois ROIs)"))
+        length(y_corners) == n_rois || throw(DimensionMismatch(
+            "Must have one y_corner per ROI (got $(length(y_corners)) for $n_rois ROIs)"))
+        length(frame_indices) == n_rois || throw(DimensionMismatch(
+            "Must have one frame index per ROI (got $(length(frame_indices)) for $n_rois ROIs)"))
 
         new{T,3,A,C}(data, x_corners, y_corners, frame_indices, camera, roi_size)
     end
@@ -288,29 +291,16 @@ Base.iterate(batch::ROIBatch, state=1) = state > length(batch) ? nothing : (batc
 
 # ===== GPU Adaptation =====
 
-"""
-    Adapt.adapt_structure(to, batch::ROIBatch)
-
-Adapt ROIBatch for GPU execution via KernelAbstractions.jl/CUDA.jl.
-
-Transfers data, x_corners, y_corners, and frame_indices to the target device.
-Camera remains on the host (contains metadata and variance maps).
-
-# Example
-```julia
-using CUDA
-batch_gpu = adapt(CuArray, batch)
-# Process on GPU...
-batch_cpu = adapt(Array, batch_gpu)  # Transfer back
-```
-"""
+# `Adapt.adapt(to, batch)` moves only `data` (to a GPU, for `to = CuArray`). The corners, frame
+# indices and camera stay on the host: their fields are `Vector{Int32}` and the camera, which a
+# device array is not.
 function Adapt.adapt_structure(to, batch::ROIBatch)
     ROIBatch(
         Adapt.adapt(to, batch.data),
-        Adapt.adapt(to, batch.x_corners),
-        Adapt.adapt(to, batch.y_corners),
-        Adapt.adapt(to, batch.frame_indices),
-        batch.camera  # Camera stays on host
+        batch.x_corners,
+        batch.y_corners,
+        batch.frame_indices,
+        batch.camera
     )
 end
 

@@ -35,13 +35,10 @@ combined = cat_smld([smld1, smld2, smld3])
 ```
 """
 function cat_smld(smlds::Vector{<:AbstractSMLD})
-    # First check emptiness before any operations
     isempty(smlds) && error("No SMLDs to concatenate")
 
-    # Then do single SMLD check
-    length(smlds) == 1 && return first(smlds)
-
-    # At this point we know we have at least 2 SMLDs
+    # One input goes through the same steps as several: the result is a new SMLD with a new
+    # emitter vector and the same metadata keys, never the input itself.
     ref_camera = smlds[1].camera
     for k in 2:length(smlds)
         is_same_camera(ref_camera, smlds[k].camera) ||
@@ -130,9 +127,8 @@ function merge_smld(smlds::Vector{<:AbstractSMLD};
     adjust_frames::Bool=false,
     adjust_datasets::Bool=false)
     isempty(smlds) && error("No SMLDs to merge")
-    length(smlds) == 1 && return first(smlds)
 
-    # Check camera compatibility
+    # Check camera compatibility (one input goes through the same steps as several)
     for k in 2:length(smlds)
         is_same_camera(smlds[1].camera, smlds[k].camera) ||
             error("Cannot merge SMLDs with different cameras: ",

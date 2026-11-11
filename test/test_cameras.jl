@@ -55,6 +55,30 @@ using SMLMCore, Test
         @test px == 2
         @test py == 2
     end
+
+    @testset "Pixel index of a position on a pixel edge" begin
+        # Pixel i covers [(i-1)·pixel_size, i·pixel_size): a position on an edge belongs to the
+        # pixel that starts there, and the camera's corner (0, 0) is in pixel (1, 1). 0.125 is
+        # exact in binary, so every edge below is exactly representable.
+        ps = 0.125
+        @test physical_to_pixel_index(0.0, 0.0, ps) == (1, 1)
+        @test physical_to_pixel_index(0.125, 0.0, ps) == (2, 1)
+        @test physical_to_pixel_index(0.25, 0.375, ps) == (3, 4)
+        @test physical_to_pixel_index(0.5, 0.25, ps) == (5, 3)
+        @test physical_to_pixel_index(0.124, 0.249, ps) == (1, 2)
+        # A 512-pixel camera's right edge is outside it, at pixel 513 (no bounds check)
+        @test physical_to_pixel_index(64.0, 63.99, ps) == (513, 512)
+        @test physical_to_pixel_index(-0.01, 0.0, ps) == (0, 1)
+    end
+
+    @testset "physical_to_pixel keeps the input's float type" begin
+        px, py = physical_to_pixel(0.05f0, 0.15f0, 0.1f0)
+        @test px isa Float32 && py isa Float32
+        @test px ≈ 1.0f0 && py ≈ 2.0f0
+        @test physical_to_pixel(0.05, 0.15, 0.1) isa Tuple{Float64,Float64}
+        # A Float32 position with a Float64 pixel size promotes as division does
+        @test physical_to_pixel(0.05f0, 0.15f0, 0.1) isa Tuple{Float64,Float64}
+    end
 end
 
 @testset "Camera" begin
