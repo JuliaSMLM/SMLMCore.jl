@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Split SMLMCore from SMLMData.jl 0.7.1 with its git history. Core types and operations stay here; file io (SMITE) moves to SMLMio. SMLMData 0.7.2 and later loads SMLMCore and SMLMio and re-exports both. Apart from the fixes below, behavior is that of SMLMData 0.7.1.
 - Requires Julia 1.10 or later, the current long-term-support release (SMLMData 0.7.1 allowed Julia 1.9).
 - SMLMCore cannot be installed together with SMLMData 0.7.1 or earlier.
+- Requires StaticArrays 1.9.8 or later; earlier versions do not load on Julia 1.10 beside the current StaticArraysCore.
 
 ### Fixed
 - `merge_smld` with `adjust_frames` or `adjust_datasets` no longer changes its inputs' emitters; renumbered entries are new emitters, and immutable emitter types can be renumbered.
