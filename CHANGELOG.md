@@ -10,11 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Split SMLMCore from SMLMData.jl 0.7.1 with its git history. Core types and operations stay here; file io (SMITE) moves to SMLMio. SMLMData 0.7.2 and later loads SMLMCore and SMLMio and re-exports both. Apart from the fixes below, behavior is that of SMLMData 0.7.1.
 - Requires Julia 1.10 or later, the current long-term-support release (SMLMData 0.7.1 allowed Julia 1.9).
+- SMLMCore cannot be installed together with SMLMData 0.7.0 or 0.7.1.
 
 ### Fixed
-- `merge_smld` with `adjust_frames` or `adjust_datasets` no longer changes the frame and dataset numbers of the input emitters (they were shared with the result and renumbered in place, so a second merge shifted them again, and an emitter listed twice in one input was shifted twice). Each renumbered entry is now a new emitter with only the requested numbers changed: a mutable emitter is copied field by field and set through `setproperty!` (fields holding arrays or other objects stay shared with the input; an emitter with a field left undefined is deep-copied instead), and an immutable emitter is rebuilt from its fields without calling its constructor (fields its constructor left unset stay unset). Immutable emitter types, including ones with a `frame` field and no `dataset` field, can now be renumbered.
-- `merge_smld` with `adjust_datasets` moves each input's datasets by the earlier inputs' total `n_datasets` and sets `n_datasets` to the total. It moved each input by 1 and set `n_datasets` to the number of inputs, so inputs holding several datasets shared dataset numbers.
-- `cat_smld` and `merge_smld` treat two cameras as the same only when every field is equal, calibration included. Two sCMOS cameras with the same pixels but different offset, gain, read noise or QE were accepted as one camera, and the result kept the first camera's calibration. A call that merged such cameras now throws; so does one that merges a scalar calibration with a uniform map of the same value. Numbers, arrays, dictionaries, tuples, immutable structs and wrapped cameras compare by value (NaN equals NaN, -0.0 equals 0.0); any other object in a camera field, such as a mutable handle, compares with its own `==`, so a camera type that holds one merges with a separately built copy only if that object's type defines `==`. A plain-bits field that a camera's constructor leaves unset holds whatever was in memory, so it can make two otherwise equal cameras differ. The error now names the input and the camera fields that differ (or the two camera types). A camera type without `pixel_edges_x` and `pixel_edges_y` fields (a camera that wraps another) made `cat_smld` and `merge_smld` throw a FieldError; it is now compared like any other.
+- `merge_smld` with `adjust_frames` or `adjust_datasets` no longer changes its inputs' emitters; renumbered entries are new emitters, and immutable emitter types can be renumbered.
+- `merge_smld` with `adjust_datasets` moves each input's datasets by the earlier inputs' total `n_datasets`, so inputs that hold several datasets no longer share dataset numbers.
+- `cat_smld` and `merge_smld` accept two cameras only when every field is equal, calibration included; the error names the fields that differ.
+- `cat_smld` and `merge_smld` with one input return a new SMLD with the metadata keys that a call with several inputs adds; they returned the input itself.
+- `physical_to_pixel_index` returns the pixel whose half-open interval holds the position, so `x = 0` is in pixel 1 and a position on a pixel edge is in the pixel that starts there. It rounded half to even, which put the camera's corner in pixel 0.
+- `physical_to_pixel` keeps the input's float type; Float32 positions gave Float64.
+- `Adapt.adapt(CuArray, batch)` on an `ROIBatch` moves only `data` and keeps the corners, frame indices and camera on the host; it threw a MethodError.
+- `ROIBatch` construction throws an `ArgumentError` for ROIs that are not square and a `DimensionMismatch` for corner or frame vectors of the wrong length, instead of an `AssertionError` from checks that Julia may compile out.
+- Editing `api_overview.md` makes the precompile cache stale, so `SMLMCore.api_overview()` and its help entry show the current text.
 
 ## SMLMData.jl [0.4.0] - 2025-01-13
 
