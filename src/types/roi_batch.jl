@@ -1,10 +1,5 @@
-"""
-ROI batch data structures for efficient parallel processing of image regions.
-
-These types provide a standardized interface for batched ROI operations across
-the JuliaSMLM ecosystem, enabling interoperability between SMLMBoxer, GaussMLE,
-and other analysis packages.
-"""
+# ROI batch types: square image regions cut from camera frames, in the form ROI finders hand to
+# fitters across the JuliaSMLM packages.
 
 using StaticArrays: SVector
 import Adapt
@@ -12,27 +7,31 @@ import Adapt
 """
     SingleROI{T}
 
-Single region of interest (ROI) with location and frame context.
+One region of interest (ROI): a square image cut from a camera frame, with where and when it was
+cut.
 
 # Fields
-- `data::Matrix{T}` - ROI image data (roi_size × roi_size pixels)
-- `corner::SVector{2,Int32}` - ROI corner position (x, y) = (col, row) in camera pixels (1-indexed)
-- `frame_idx::Int32` - Frame number in image stack (1-indexed)
+- `data::Matrix{T}`: the ROI pixels as cut from the camera image, indexed `[row, col] = [y, x]`,
+  in the camera's raw units (ADU for an [`SCMOSCamera`](@ref))
+- `corner::SVector{2,Int32}`: camera pixel `(x, y) = (column, row)` of the ROI's top-left pixel,
+  1-based
+- `frame_idx::Int32`: frame number, 1-based
 
-# Coordinate System
-- **Camera coordinates**: 1-indexed, (1,1) is top-left pixel of full image
-- **Corner**: (x, y) = (col, row) position where top-left of ROI starts
-- **ROI data**: (1,1) is top-left pixel within the ROI itself
+ROI pixel `data[i, j]` is camera pixel (column `corner[1] + j - 1`, row `corner[2] + i - 1`);
+see [ROIs](@ref).
+
+# Constructors
+- `SingleROI{T}(data, corner, frame_idx)`: converts its arguments, so `corner` can be a tuple
+  and `frame_idx` any integer.
+- `SingleROI(data::Matrix{T}, corner::SVector{2,Int32}, frame_idx::Int32)`
 
 # Example
-```julia
-# Create single ROI
-roi_data = rand(Float32, 11, 11)  # 11×11 pixel ROI
-roi = SingleROI(roi_data, SVector{2,Int32}(100, 200), Int32(5))
-
-# Access fields
-println("ROI at camera position: ", roi.corner)  # (100, 200) = (col, row)
-println("From frame: ", roi.frame_idx)  # Frame 5
+```jldoctest
+julia> roi = SingleROI{Float32}(zeros(Float32, 11, 11), (100, 200), 5)
+SingleROI{Float32}:
+  Size: 11 × 11 pixels
+  Corner: (100, 200) = (col, row)
+  Frame: 5
 ```
 """
 struct SingleROI{T}
@@ -48,109 +47,62 @@ Base.eltype(::SingleROI{T}) where {T} = T
 """
     ROIBatch{T,N,A,C}
 
-Batch of regions of interest for efficient parallel processing with camera context.
-
-This type serves as the standard interface for ROI-based processing across the
-JuliaSMLM ecosystem. ROIs are extracted by SMLMBoxer and consumed by fitting
-packages like GaussMLE.
-
-# Type Parameters
-- `T`: Element type of ROI data (typically Float32 or Float64)
-- `N`: Dimension of data array (always 3 for ROI batches)
-- `A`: Array type (e.g., Array, CuArray for GPU)
-- `C`: Camera type (AbstractCamera subtype)
+A batch of square ROIs from one camera, stored as one array: the form in which ROI finders hand
+ROIs to fitters (SMLMBoxer to GaussMLE, for example).
 
 # Fields
-- `data::A` - ROI image stack (roi_size × roi_size × n_rois)
-- `x_corners::Vector{Int32}` - X (column) coordinates of ROI corners in camera coordinates
-- `y_corners::Vector{Int32}` - Y (row) coordinates of ROI corners in camera coordinates
-- `frame_indices::Vector{Int32}` - Frame number for each ROI (1-indexed)
-- `camera::C` - Camera object (IdealCamera or SCMOSCamera) representing full image
-- `roi_size::Int` - Size of each ROI in pixels (assumed square)
+- `data::A`: the ROI pixels, an `AbstractArray{T,3}` of size `(roi_size, roi_size, n_rois)`
+  indexed `[row, col, roi] = [y, x, roi]`, as cut from the camera image, in the camera's raw
+  units (ADU for an [`SCMOSCamera`](@ref), which a fitter converts with the camera's `offset`
+  and `gain`)
+- `x_corners::Vector{Int32}`: camera column of each ROI's top-left pixel, 1-based
+- `y_corners::Vector{Int32}`: camera row of each ROI's top-left pixel, 1-based
+- `frame_indices::Vector{Int32}`: frame number of each ROI, 1-based
+- `camera::C`: the camera of the full image (an `AbstractCamera`)
+- `roi_size::Int`: side of each ROI (pixels)
 
-# Coordinate System
-- **Camera coordinates**: 1-indexed, (1,1) = top-left of full image
-- **ROI corners**: (x, y) = (col, row) position in camera coordinates
-- **ROI data**: Local coordinates, (1,1) = top-left within ROI
-- **Frame indices**: 1-indexed, matching camera frame numbering
+`T` is the element type of `data`, `N` is 3, `A` is the array type (`Array`, or a GPU array) and
+`C` the camera type.
+
+ROI pixel `data[i, j, k]` is camera pixel (column `x_corners[k] + j - 1`, row
+`y_corners[k] + i - 1`). For uniform pixels of size `Δx` × `Δy` (µm) its center is at
+`((x_corners[k] + j - 1.5)·Δx, (y_corners[k] + i - 1.5)·Δy)` µm; see [ROIs](@ref).
 
 # Constructors
+- `ROIBatch(data, x_corners, y_corners, frame_indices, camera)`: the corner and frame vectors
+  may hold any integer type and are converted to `Int32`. ROIs must be square (else an
+  `ArgumentError`), and each vector needs one entry per ROI (else a `DimensionMismatch`).
+- `ROIBatch(rois::Vector{SingleROI{T}}, camera)`: from single ROIs of one size; an empty vector
+  gives an empty batch.
 
-## From arrays (main constructor)
-```julia
-ROIBatch(data::AbstractArray{T,3}, x_corners::Vector{Int32}, y_corners::Vector{Int32},
-         frame_indices::Vector{Int32}, camera::AbstractCamera)
-```
-
-## From separate x/y corner vectors
-```julia
-ROIBatch(data::AbstractArray{T,3}, x_corners::Vector, y_corners::Vector,
-         frame_indices::Vector, camera::AbstractCamera)
-```
-
-## From vector of SingleROI
-```julia
-ROIBatch(rois::Vector{SingleROI{T}}, camera::AbstractCamera)
-```
-
-# Validation
-- ROIs must be square (data dimensions 1 == dimension 2)
-- x_corners must have length n_rois
-- y_corners must have length n_rois
-- Frame indices must have length n_rois
-- All arrays must have consistent n_rois
-
-# Indexing and Iteration
-```julia
-batch = ROIBatch(data, x_corners, y_corners, frames, camera)
-
-# Get single ROI
-roi = batch[5]  # Returns SingleROI{T}
-
-# Iterate over all ROIs
-for roi in batch
-    process(roi.data, roi.corner, roi.frame_idx)
-end
-
-# Length
-n = length(batch)  # Number of ROIs
-```
-
-# GPU Support
-Supports GPU transfer via Adapt.jl (KernelAbstractions.jl):
-```julia
-using CUDA
-batch_gpu = adapt(CuArray, batch)  # Transfer data to GPU
-# Camera stays on host (contains metadata)
-```
+# Notes
+- `batch[k]` returns ROI `k` as a [`SingleROI`](@ref), `length(batch)` is the number of ROIs,
+  and iterating a batch gives its ROIs in order.
+- `Adapt.adapt(CuArray, batch)` (after `using Adapt, CUDA`; both must be added to the
+  environment, `Pkg.add(["Adapt", "CUDA"])`) moves `data` to the GPU. The corners, frame indices
+  and camera stay on the host.
+  ```julia
+  using Adapt, CUDA
+  batch_gpu = Adapt.adapt(CuArray, batch)
+  ```
 
 # Example
-```julia
-using SMLMCore
-using StaticArrays
+```jldoctest
+julia> camera = IdealCamera(512, 512, 0.1);
 
-# Create camera
-camera = IdealCamera(512, 512, 0.1)  # 512×512 pixels, 0.1μm/pixel
+julia> data = zeros(Float32, 11, 11, 3);   # 3 ROIs of 11 × 11 pixels, [y, x, roi]
 
-# Create ROI batch (e.g., from SMLMBoxer.getboxes)
-n_rois = 100
-roi_size = 11
-data = rand(Float32, roi_size, roi_size, n_rois)
-x_corners = rand(Int32(1):Int32(500), n_rois)
-y_corners = rand(Int32(1):Int32(500), n_rois)
-frames = rand(Int32(1):Int32(10), n_rois)
+julia> batch = ROIBatch(data, [100, 200, 300], [50, 60, 70], [1, 1, 2], camera);
 
-batch = ROIBatch(data, x_corners, y_corners, frames, camera)
+julia> length(batch), batch.roi_size
+(3, 11)
 
-# Access
-println("Batch contains \$(length(batch)) ROIs")
-first_roi = batch[1]
-println("First ROI at position: \$(first_roi.corner)")
+julia> Tuple(batch[3].corner), batch[3].frame_idx
+((300, 70), 2)
 ```
 
-# See Also
-- [`SingleROI`](@ref) - Individual ROI type
-- [`IdealCamera`](@ref), [`SCMOSCamera`](@ref) - Camera types
+# See also
+[`SingleROI`](@ref), [`IdealCamera`](@ref), [`SCMOSCamera`](@ref)
 """
 struct ROIBatch{T,N,A<:AbstractArray{T,N},C<:AbstractCamera}
     data::A
@@ -178,48 +130,12 @@ struct ROIBatch{T,N,A<:AbstractArray{T,N},C<:AbstractCamera}
     end
 end
 
-"""
-    ROIBatch(data, x_corners, y_corners, frame_indices, camera)
-
-Construct ROIBatch from separate x and y corner vectors.
-
-# Arguments
-- `data::AbstractArray{T,3}` - ROI stack (roi_size × roi_size × n_rois)
-- `x_corners::Vector` - X (column) coordinates of ROI corners
-- `y_corners::Vector` - Y (row) coordinates of ROI corners
-- `frame_indices::Vector` - Frame number for each ROI
-- `camera::AbstractCamera` - Camera object for full image
-
-# Example
-```julia
-batch = ROIBatch(data, x_corners, y_corners, frames, camera)
-```
-"""
 function ROIBatch(data::AbstractArray{T,3}, x_corners::Vector, y_corners::Vector,
                   frame_indices::Vector, camera::C) where {T,C<:AbstractCamera}
     # Convert to Int32 and call inner constructor
     ROIBatch(data, Int32.(x_corners), Int32.(y_corners), Int32.(frame_indices), camera)
 end
 
-"""
-    ROIBatch(rois::Vector{SingleROI{T}}, camera)
-
-Construct ROIBatch from vector of SingleROI objects.
-
-# Arguments
-- `rois::Vector{SingleROI{T}}` - Vector of individual ROIs
-- `camera::AbstractCamera` - Camera object for full image
-
-# Returns
-ROIBatch{T,3,Array{T,3},typeof(camera)}
-
-# Example
-```julia
-rois = [SingleROI(rand(Float32, 11, 11), SVector{2,Int32}(i*10, i*10), Int32(i))
-        for i in 1:100]
-batch = ROIBatch(rois, camera)
-```
-"""
 function ROIBatch(rois::Vector{SingleROI{T}}, camera::C) where {T,C<:AbstractCamera}
     if isempty(rois)
         # Empty batch - use provided camera
@@ -248,45 +164,16 @@ end
 
 # ===== Indexing and Iteration =====
 
-"""
-    getindex(batch::ROIBatch, i::Int) -> SingleROI
-
-Get the i-th ROI from the batch.
-
-Returns a SingleROI containing the data, corner position, and frame index.
-"""
 Base.getindex(batch::ROIBatch, i::Int) = SingleROI(
     batch.data[:, :, i],
     SVector{2,Int32}(batch.x_corners[i], batch.y_corners[i]),
     batch.frame_indices[i]
 )
 
-"""
-    length(batch::ROIBatch) -> Int
-
-Number of ROIs in the batch.
-"""
 Base.length(batch::ROIBatch) = size(batch.data, 3)
 
-"""
-    size(batch::ROIBatch) -> Tuple{Int}
-
-Size of the batch (returns tuple for consistency with iteration protocol).
-"""
 Base.size(batch::ROIBatch) = (length(batch),)
 
-"""
-    iterate(batch::ROIBatch, [state]) -> Union{Nothing, Tuple{SingleROI, Int}}
-
-Iterate over ROIs in the batch.
-
-# Example
-```julia
-for roi in batch
-    println("Processing ROI at ", roi.corner)
-end
-```
-"""
 Base.iterate(batch::ROIBatch, state=1) = state > length(batch) ? nothing : (batch[state], state + 1)
 
 # ===== GPU Adaptation =====
@@ -306,22 +193,12 @@ end
 
 # ===== Display Methods =====
 
-"""
-    show(io::IO, roi::SingleROI)
-
-Compact display of SingleROI.
-"""
 function Base.show(io::IO, roi::SingleROI{T}) where T
     print(io, "SingleROI{$T}($(size(roi.data, 1))×$(size(roi.data, 2)), ")
     print(io, "corner=($(roi.corner[1]), $(roi.corner[2])), ")
     print(io, "frame=$(roi.frame_idx))")
 end
 
-"""
-    show(io::IO, ::MIME"text/plain", roi::SingleROI)
-
-Detailed display of SingleROI.
-"""
 function Base.show(io::IO, ::MIME"text/plain", roi::SingleROI{T}) where T
     println(io, "SingleROI{$T}:")
     println(io, "  Size: $(size(roi.data, 1)) × $(size(roi.data, 2)) pixels")
@@ -329,21 +206,11 @@ function Base.show(io::IO, ::MIME"text/plain", roi::SingleROI{T}) where T
     print(io, "  Frame: $(roi.frame_idx)")
 end
 
-"""
-    show(io::IO, batch::ROIBatch)
-
-Compact display of ROIBatch.
-"""
 function Base.show(io::IO, batch::ROIBatch{T}) where T
     n_rois = length(batch)
     print(io, "ROIBatch{$T}($(batch.roi_size)×$(batch.roi_size), $n_rois ROIs)")
 end
 
-"""
-    show(io::IO, ::MIME"text/plain", batch::ROIBatch)
-
-Detailed display of ROIBatch.
-"""
 function Base.show(io::IO, ::MIME"text/plain", batch::ROIBatch{T,N,A,C}) where {T,N,A,C}
     n_rois = length(batch)
 

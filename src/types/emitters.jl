@@ -1,20 +1,30 @@
 """
     AbstractEmitter
 
-Abstract supertype for all emitter types in single molecule localization microscopy (SMLM).
-All spatial coordinates are specified in physical units (microns).
+Supertype of all emitter (localization) types. Positions are in µm.
+
+A custom emitter type subtypes `AbstractEmitter` and has the properties `x` and `y` (and `z`
+for 3D) in µm and `photons`. [`filter_frames`](@ref) needs a `frame` property, and renumbering
+in [`merge_smld`](@ref) needs `frame` and `dataset`. Declare the type's dimension as
+[`emitter_ndims`](@ref) describes.
 """
 abstract type AbstractEmitter end
 
 """
     Emitter2D{T} <: AbstractEmitter
 
-Represents a 2D emitter for SMLM simulations with position and brightness.
+A 2D emitter with a position and a photon count, as used for simulation and ground truth.
 
 # Fields
-- `x::T`: x-coordinate in microns
-- `y::T`: y-coordinate in microns
-- `photons::T`: number of photons emitted by the fluorophore
+- `x::T`: x position (µm)
+- `y::T`: y position (µm)
+- `photons::T`: number of photons from the emitter that reach the camera in the frame, before QE
+
+It has no `frame` or `dataset` field, so [`filter_frames`](@ref) and renumbering in
+[`merge_smld`](@ref) do not apply to it.
+
+# Constructors
+- `Emitter2D{T}(x, y, photons)`, or `Emitter2D(x, y, photons)` with all three of one type.
 """
 mutable struct Emitter2D{T} <: AbstractEmitter
     x::T
@@ -25,13 +35,19 @@ end
 """
     Emitter3D{T} <: AbstractEmitter
 
-Represents a 3D emitter for SMLM simulations with position and brightness.
+A 3D emitter with a position and a photon count, as used for simulation and ground truth.
 
 # Fields
-- `x::T`: x-coordinate in microns
-- `y::T`: y-coordinate in microns
-- `z::T`: z-coordinate in microns (axial position)
-- `photons::T`: number of photons emitted by the fluorophore
+- `x::T`: x position (µm)
+- `y::T`: y position (µm)
+- `z::T`: axial position (µm)
+- `photons::T`: number of photons from the emitter that reach the camera in the frame, before QE
+
+It has no `frame` or `dataset` field, so [`filter_frames`](@ref) and renumbering in
+[`merge_smld`](@ref) do not apply to it.
+
+# Constructors
+- `Emitter3D{T}(x, y, z, photons)`, or `Emitter3D(x, y, z, photons)` with all four of one type.
 """
 mutable struct Emitter3D{T} <: AbstractEmitter
     x::T
@@ -43,22 +59,41 @@ end
 """
     Emitter2DFit{T} <: AbstractEmitter
 
-Represents fitted 2D localization results with uncertainties and temporal/tracking information.
+A fitted 2D localization: position, photons and background with their uncertainties, and the
+frame, dataset and track it belongs to.
 
 # Fields
-- `x::T`: fitted x-coordinate in microns
-- `y::T`: fitted y-coordinate in microns
-- `photons::T`: fitted number of photons
-- `bg::T`: fitted background in photons/pixel
-- `σ_x::T`: uncertainty in x position in microns
-- `σ_y::T`: uncertainty in y position in microns
-- `σ_xy::T`: covariance between x and y uncertainties (microns², 0 = axis-aligned)
-- `σ_photons::T`: uncertainty in photon count
-- `σ_bg::T`: uncertainty in background in photons/pixel
-- `frame::Int`: frame number in acquisition sequence
-- `dataset::Int`: identifier for specific acquisition/dataset
-- `track_id::Int`: identifier for linking localizations across frames (0 = unlinked)
-- `id::Int`: unique identifier within dataset
+- `x::T`, `y::T`: fitted position (µm)
+- `photons::T`: fitted number of photons from the emitter that reach the camera in the frame,
+  before QE
+- `bg::T`: fitted background (photons/pixel)
+- `σ_x::T`, `σ_y::T`: standard deviations of the position (µm)
+- `σ_xy::T`: covariance of x and y (µm²); 0 when the uncertainty ellipse is axis-aligned
+- `σ_photons::T`: standard deviation of `photons` (photons)
+- `σ_bg::T`: standard deviation of `bg` (photons/pixel)
+- `frame::Int`: frame number, 1-based
+- `dataset::Int`: dataset number, 1-based
+- `track_id::Int`: track the localization is linked into (0 = unlinked)
+- `id::Int`: identifier within the dataset (0 = not set)
+
+The position covariance is
+``\\Sigma = \\begin{pmatrix} \\sigma_x^2 & \\sigma_{xy} \\\\ \\sigma_{xy} & \\sigma_y^2 \\end{pmatrix}``:
+`σ_x` and `σ_y` are standard deviations (µm), and `σ_xy` is a covariance (µm²).
+
+# Constructors
+- `Emitter2DFit{T}(x, y, photons, bg, σ_x, σ_y, σ_photons, σ_bg; σ_xy=zero(T), frame=1,
+  dataset=1, track_id=0, id=0)`: the eight values must already be of type `T` (write `1000.0`,
+  not `1000`).
+- `Emitter2DFit{T}(x, y, photons, bg, σ_x, σ_y, σ_xy, σ_photons, σ_bg, frame, dataset,
+  track_id, id)`: every field, in field order.
+
+# Example
+```jldoctest
+julia> e = Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=5);
+
+julia> (e.x, e.y, e.frame, e.dataset, e.σ_xy)
+(1.0, 2.0, 5, 1, 0.0)
+```
 """
 mutable struct Emitter2DFit{T} <: AbstractEmitter
     x::T
@@ -79,26 +114,43 @@ end
 """
     Emitter3DFit{T} <: AbstractEmitter
 
-Represents fitted 3D localization results with uncertainties and temporal/tracking information.
+A fitted 3D localization: position, photons and background with their uncertainties, and the
+frame, dataset and track it belongs to.
 
 # Fields
-- `x::T`: fitted x-coordinate in microns
-- `y::T`: fitted y-coordinate in microns
-- `z::T`: fitted z-coordinate in microns
-- `photons::T`: fitted number of photons
-- `bg::T`: fitted background in photons/pixel
-- `σ_x::T`: uncertainty in x position in microns
-- `σ_y::T`: uncertainty in y position in microns
-- `σ_z::T`: uncertainty in z position in microns
-- `σ_xy::T`: covariance between x and y (microns², 0 = uncorrelated)
-- `σ_xz::T`: covariance between x and z (microns², 0 = uncorrelated)
-- `σ_yz::T`: covariance between y and z (microns², 0 = uncorrelated)
-- `σ_photons::T`: uncertainty in photon count
-- `σ_bg::T`: uncertainty in background in photons/pixel
-- `frame::Int`: frame number in acquisition sequence
-- `dataset::Int`: identifier for specific acquisition/dataset
-- `track_id::Int`: identifier for linking localizations across frames (0 = unlinked)
-- `id::Int`: unique identifier within dataset
+- `x::T`, `y::T`, `z::T`: fitted position (µm)
+- `photons::T`: fitted number of photons from the emitter that reach the camera in the frame,
+  before QE
+- `bg::T`: fitted background (photons/pixel)
+- `σ_x::T`, `σ_y::T`, `σ_z::T`: standard deviations of the position (µm)
+- `σ_xy::T`, `σ_xz::T`, `σ_yz::T`: covariances of the position (µm²); 0 = uncorrelated
+- `σ_photons::T`: standard deviation of `photons` (photons)
+- `σ_bg::T`: standard deviation of `bg` (photons/pixel)
+- `frame::Int`: frame number, 1-based
+- `dataset::Int`: dataset number, 1-based
+- `track_id::Int`: track the localization is linked into (0 = unlinked)
+- `id::Int`: identifier within the dataset (0 = not set)
+
+The position covariance is
+``\\Sigma = \\begin{pmatrix} \\sigma_x^2 & \\sigma_{xy} & \\sigma_{xz} \\\\ \\sigma_{xy} & \\sigma_y^2 & \\sigma_{yz} \\\\ \\sigma_{xz} & \\sigma_{yz} & \\sigma_z^2 \\end{pmatrix}``:
+`σ_x`, `σ_y` and `σ_z` are standard deviations (µm), and `σ_xy`, `σ_xz` and `σ_yz` are
+covariances (µm²).
+
+# Constructors
+- `Emitter3DFit{T}(x, y, z, photons, bg, σ_x, σ_y, σ_z, σ_photons, σ_bg; σ_xy=zero(T),
+  σ_xz=zero(T), σ_yz=zero(T), frame=1, dataset=1, track_id=0, id=0)`: the ten values must
+  already be of type `T`.
+- `Emitter3DFit{T}(x, y, z, photons, bg, σ_x, σ_y, σ_z, σ_xy, σ_xz, σ_yz, σ_photons, σ_bg,
+  frame, dataset, track_id, id)`: every field, in field order.
+
+# Example
+```jldoctest
+julia> e = Emitter3DFit{Float64}(1.0, 2.0, -0.5, 1000.0, 10.0, 0.01, 0.01, 0.02, 50.0, 2.0;
+                                 σ_xz=0.002, frame=5);
+
+julia> (e.z, e.σ_z, e.σ_xz, e.frame)
+(-0.5, 0.02, 0.002, 5)
+```
 """
 mutable struct Emitter3DFit{T} <: AbstractEmitter
     x::T
@@ -121,47 +173,7 @@ mutable struct Emitter3DFit{T} <: AbstractEmitter
 end
 
 
-"""
-    Emitter2DFit{T}(x, y, photons, bg, σ_x, σ_y, σ_photons, σ_bg;
-                    σ_xy=zero(T), frame=1, dataset=1, track_id=0, id=0) where T
-
-Convenience constructor for 2D localization fit results with optional identification parameters.
-
-# Arguments
-## Required
-- `x::T`: fitted x-coordinate in microns
-- `y::T`: fitted y-coordinate in microns
-- `photons::T`: fitted number of photons
-- `bg::T`: fitted background in photons/pixel
-- `σ_x::T`: uncertainty in x position in microns
-- `σ_y::T`: uncertainty in y position in microns
-- `σ_photons::T`: uncertainty in photon count
-- `σ_bg::T`: uncertainty in background level
-
-## Optional Keywords
-- `σ_xy::T=0`: covariance between x and y uncertainties (microns², 0 = axis-aligned)
-- `frame::Int=1`: frame number in acquisition sequence
-- `dataset::Int=1`: identifier for specific acquisition/dataset
-- `track_id::Int=0`: identifier for linking localizations across frames
-- `id::Int=0`: unique identifier within dataset
-
-# Example
-```julia
-# Create emitter with just required parameters
-emitter = Emitter2DFit{Float64}(
-    1.0, 2.0,        # x, y
-    1000.0, 10.0,    # photons, background
-    0.01, 0.01,      # σ_x, σ_y
-    50.0, 2.0        # σ_photons, σ_bg
-)
-
-# Create emitter with covariance for rotated uncertainty ellipse
-emitter = Emitter2DFit{Float64}(
-    1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0;
-    σ_xy=0.005, frame=5, dataset=2
-)
-```
-"""
+# Keyword constructors of the fit types (documented in the type docstrings)
 function Emitter2DFit{T}(x::T, y::T, photons::T, bg::T,
                         σ_x::T, σ_y::T, σ_photons::T, σ_bg::T;
                         σ_xy::T=zero(T), frame::Int=1, dataset::Int=1, track_id::Int=0, id::Int=0) where T
@@ -169,52 +181,6 @@ function Emitter2DFit{T}(x::T, y::T, photons::T, bg::T,
                     frame, dataset, track_id, id)
 end
 
-"""
-    Emitter3DFit{T}(x, y, z, photons, bg, σ_x, σ_y, σ_z, σ_photons, σ_bg;
-                    σ_xy=zero(T), σ_xz=zero(T), σ_yz=zero(T),
-                    frame=1, dataset=1, track_id=0, id=0) where T
-
-Convenience constructor for 3D localization fit results with optional identification parameters.
-
-# Arguments
-## Required
-- `x::T`: fitted x-coordinate in microns
-- `y::T`: fitted y-coordinate in microns
-- `z::T`: fitted z-coordinate in microns
-- `photons::T`: fitted number of photons
-- `bg::T`: fitted background in photons/pixel
-- `σ_x::T`: uncertainty in x position in microns
-- `σ_y::T`: uncertainty in y position in microns
-- `σ_z::T`: uncertainty in z position in microns
-- `σ_photons::T`: uncertainty in photon count
-- `σ_bg::T`: uncertainty in background level
-
-## Optional Keywords
-- `σ_xy::T=0`: covariance between x and y (microns², 0 = uncorrelated)
-- `σ_xz::T=0`: covariance between x and z (microns², 0 = uncorrelated)
-- `σ_yz::T=0`: covariance between y and z (microns², 0 = uncorrelated)
-- `frame::Int=1`: frame number in acquisition sequence
-- `dataset::Int=1`: identifier for specific acquisition/dataset
-- `track_id::Int=0`: identifier for linking localizations across frames
-- `id::Int=0`: unique identifier within dataset
-
-# Example
-```julia
-# Create emitter with just required parameters
-emitter = Emitter3DFit{Float64}(
-    1.0, 2.0, -0.5,  # x, y, z
-    1000.0, 10.0,    # photons, background
-    0.01, 0.01, 0.02,# σ_x, σ_y, σ_z
-    50.0, 2.0        # σ_photons, σ_bg
-)
-
-# Create emitter with full 3D covariance
-emitter = Emitter3DFit{Float64}(
-    1.0, 2.0, -0.5, 1000.0, 10.0, 0.01, 0.01, 0.02, 50.0, 2.0;
-    σ_xy=0.005, σ_xz=0.002, σ_yz=0.003, frame=5, track_id=1
-)
-```
-"""
 function Emitter3DFit{T}(x::T, y::T, z::T, photons::T, bg::T,
                         σ_x::T, σ_y::T, σ_z::T, σ_photons::T, σ_bg::T;
                         σ_xy::T=zero(T), σ_xz::T=zero(T), σ_yz::T=zero(T),
@@ -229,7 +195,7 @@ end
     emitter_ndims(e::AbstractEmitter)
     emitter_ndims(::Type{<:AbstractEmitter})
 
-Spatial dimension of emitters, `2` or `3`, or `nothing` when there is no single answer.
+Return the spatial dimension of emitters, `2`, `3`, or `nothing` when there is no single answer.
 
 An emitter's dimension is the one its type declares, and for a type that declares none it is
 `3` when the emitter has a property `z` (`hasproperty(e, :z)`) and `2` when it does not. A
@@ -250,38 +216,36 @@ type, for its elements (whatever their properties) and for empty vectors of it:
 
     SMLMCore.emitter_ndims(::Type{<:MyLocalization{N}}) where {N} = N
 
-A collection whose element type declares a dimension is answered from the type; otherwise every
-element is checked, stopping at the first element that differs from the first. The scan asks each
-element's type first and calls `propertynames` only on elements whose type declares nothing
-(twice on the first element); it allocates nothing itself, so a `propertynames` that allocates
-makes the scan allocate.
-
 A caller that needs a number must handle `nothing` itself, for example
 `d = emitter_ndims(smld); d === nothing && throw(ArgumentError("emitters are mixed 2D/3D or empty"))`,
 or treat an empty input as a no-op before asking. Do not compare the result with `<` or `>`
 without that check.
 
-# Examples
-```julia
-emitter_ndims(Emitter2DFit)   # 2
-emitter_ndims(smld_3d)        # 3 for an SMLD of Emitter3DFit
+# Example
+```jldoctest
+julia> emitter_ndims(Emitter2DFit{Float64})
+2
 
-# An emitter type defined in another package
-mutable struct MyEmitter{T} <: SMLMCore.AbstractEmitter
-    x::T
-    y::T
-    photons::T
-    frame::Int
-    dataset::Int
-    track_id::Int
-    id::Int
-end
-emitter_ndims(MyEmitter(1.0, 2.0, 500.0, 1, 1, 0, 1))   # 2
-emitter_ndims(MyEmitter{Float64})                      # nothing: the type declares nothing
+julia> emitter_ndims(Emitter3D{Float64}(1.0, 2.0, 0.1, 500.0))
+3
 
-mixed = SMLMCore.AbstractEmitter[Emitter2D{Float64}(1.0, 2.0, 500.0),
-                                 Emitter3D{Float64}(1.0, 2.0, 0.1, 500.0)]
-emitter_ndims(mixed)          # nothing
+julia> mixed = SMLMCore.AbstractEmitter[Emitter2D{Float64}(1.0, 2.0, 500.0),
+                                        Emitter3D{Float64}(1.0, 2.0, 0.1, 500.0)];
+
+julia> emitter_ndims(mixed) === nothing
+true
+
+julia> struct MyEmitter <: SMLMCore.AbstractEmitter   # a type from another package
+           x::Float64
+           y::Float64
+           photons::Float64
+       end
+
+julia> emitter_ndims(MyEmitter(1.0, 2.0, 500.0))   # no property z
+2
+
+julia> emitter_ndims(MyEmitter) === nothing   # the type declares no dimension
+true
 ```
 """
 function emitter_ndims(::Type{E}) where {E<:AbstractEmitter}
@@ -303,11 +267,7 @@ function emitter_ndims(emitters::AbstractVector{<:AbstractEmitter})
     return all(e -> emitter_ndims(e) == d1, emitters) ? d1 : nothing
 end
 
-"""
-    Base.show methods for Emitter types
-
-These methods provide clean displays of all emitter types in both REPL and other contexts.
-"""
+# Base.show methods for the emitter types: a compact one-line form and a detailed REPL form.
 
 # --- Emitter2D ---
 

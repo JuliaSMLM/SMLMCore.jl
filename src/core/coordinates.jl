@@ -1,8 +1,25 @@
 """
-    pixel_to_physical(px::Real, py::Real, pixel_size::T) where T
+    pixel_to_physical(px, py, pixel_size) -> (x, y)
 
-Convert pixel coordinates to physical coordinates (in microns).
-Returns coordinates with the same type as pixel_size.
+Convert pixel coordinates to positions in µm, for square pixels of `pixel_size` µm at the sample
+with the camera's edges starting at 0.
+
+Pixel coordinates are 1-based: `px` is the column and `py` the row, and `(1, 1)` is the center
+of the top-left pixel, so `x = (px - 0.5) * pixel_size`. The result has `pixel_size`'s type, so
+`pixel_size` must be a float. For rectangular pixels or a camera with its own edges, use
+[`get_pixel_centers`](@ref). [Pixels and coordinates](@ref) gives the convention.
+
+# Example
+```jldoctest
+julia> pixel_to_physical(1, 1, 0.1)   # the center of the top-left pixel
+(0.05, 0.05)
+
+julia> pixel_to_physical(10.5, 3, 0.1)
+(1.0, 0.25)
+```
+
+# See also
+[`physical_to_pixel`](@ref), [`physical_to_pixel_index`](@ref)
 """
 function pixel_to_physical(px::Real, py::Real, pixel_size::T) where T
     x_physical = T((px - 0.5) * pixel_size)
@@ -11,23 +28,20 @@ function pixel_to_physical(px::Real, py::Real, pixel_size::T) where T
 end
 
 """
-    physical_to_pixel(x::Real, y::Real, pixel_size::Real)
+    physical_to_pixel(x, y, pixel_size) -> (px, py)
 
-Convert physical coordinates (in microns) to pixel coordinates.
+Convert a position in µm to pixel coordinates, the inverse of [`pixel_to_physical`](@ref), for
+square pixels of `pixel_size` µm at the sample with the camera's edges starting at 0.
 
-# Arguments
-- `x::Real`: x coordinate in microns (0,0 is top-left of image)
-- `y::Real`: y coordinate in microns (0,0 is top-left of image)
-- `pixel_size::Real`: size of a pixel in microns
-
-# Returns
-Tuple{Float64, Float64}: (px,py) pixel coordinates where (1,1) is center of top-left pixel
+`px` is the column and `py` the row, 1-based, and `(1, 1)` is the center of the top-left pixel,
+so `px = x / pixel_size + 0.5`; the camera's corner, `(0, 0)` µm, is at `(0.5, 0.5)`. The result
+has the type of `x / pixel_size`, so Float32 inputs give Float32. For the integer index of the
+pixel that holds a position, use [`physical_to_pixel_index`](@ref).
 
 # Example
-```julia
-# For a camera with 0.1 micron pixels
-px, py = physical_to_pixel(0.05, 0.05, 0.1)  # Point 0.05,0.05 microns from origin
-# Returns (1.0, 1.0) - center of first pixel
+```jldoctest
+julia> physical_to_pixel(0.05, 0.25, 0.1)
+(1.0, 3.0)
 ```
 """
 function physical_to_pixel(x::Real, y::Real, pixel_size::Real)
@@ -39,43 +53,51 @@ function physical_to_pixel(x::Real, y::Real, pixel_size::Real)
 end
 
 """
-    physical_to_pixel_index(x::Real, y::Real, pixel_size::Real) -> (px, py)
+    physical_to_pixel_index(x, y, pixel_size) -> (px, py)
 
 Return the 1-based (column, row) index of the pixel whose half-open interval
-`[(i-1)·pixel_size, i·pixel_size)` contains the position, for square pixels with the camera's
-edges starting at 0. A position outside the camera gives an index outside `1:N`; the function
-does not check bounds.
+`[(i-1)·pixel_size, i·pixel_size)` contains the position, for square pixels of `pixel_size` µm
+with the camera's edges starting at 0. A position outside the camera gives an index outside
+`1:N`; the function does not check bounds.
+
+# Example
+```jldoctest
+julia> physical_to_pixel_index(0.0, 0.0, 0.1)   # the camera's corner is in pixel (1, 1)
+(1, 1)
+
+julia> physical_to_pixel_index(0.25, 0.05, 0.125)   # 0.25 µm is the left edge of pixel 3
+(3, 1)
+```
 """
 function physical_to_pixel_index(x::Real, y::Real, pixel_size::Real)
     return (floor(Int, x / pixel_size) + 1, floor(Int, y / pixel_size) + 1)
 end
 
 """
-    get_pixel_centers(cam::AbstractCamera)
+    get_pixel_centers(cam::AbstractCamera) -> (centers_x, centers_y)
 
-Calculate the physical coordinates of all pixel centers for any camera type.
+Return the positions (µm) of a camera's pixel centers along x and along y, each midway between
+two edges.
 
-For each dimension, the center positions are computed as the midpoint between 
-consecutive edge positions. This works for both regular (uniform pixel size) 
-and irregular (varying pixel size) cameras.
-
-# Arguments
-- `cam::AbstractCamera`: Any camera type that implements the AbstractCamera interface
-  with pixel_edges_x and pixel_edges_y fields in physical units (microns)
-
-# Returns
-Tuple{Vector, Vector}: (centers_x, centers_y) where each vector contains the physical 
-coordinates (in microns) of pixel centers along that dimension
+It works for any camera with `pixel_edges_x` and `pixel_edges_y` fields, uniform or not, and
+for rectangular pixels.
 
 # Example
-```julia
-# For a 512x512 camera with 0.1 micron pixels
-cam = IdealCamera(1:512, 1:512, 0.1)
-centers_x, centers_y = get_pixel_centers(cam)
+```jldoctest
+julia> centers_x, centers_y = get_pixel_centers(IdealCamera(4, 3, (0.5, 0.25)));
 
-# First pixel center should be at (0.05, 0.05) microns
-@assert centers_x[1] ≈ 0.05
-@assert centers_y[1] ≈ 0.05
+julia> centers_x
+4-element Vector{Float64}:
+ 0.25
+ 0.75
+ 1.25
+ 1.75
+
+julia> centers_y
+3-element Vector{Float64}:
+ 0.125
+ 0.375
+ 0.625
 ```
 """
 function get_pixel_centers(cam::AbstractCamera)

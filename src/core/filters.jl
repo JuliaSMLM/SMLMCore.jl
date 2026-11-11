@@ -1,18 +1,41 @@
 """
     @filter(smld, condition)
 
-Filter SMLD emitters using a natural condition syntax.
-Transforms expressions at compile time into efficient filtering operations.
+Return a new SMLD with the emitters for which `condition` holds, a condition written in terms of
+emitter properties.
 
-# Examples
-```julia
-# Simple conditions
-bright = @filter(smld, photons > 1000)
-early = @filter(smld, frame < 10)
+Every name in `condition` is read as an emitter property, except the operators `<`, `>`, `<=`,
+`>=`, `==`, `!=`, `in` and `∈`, and `&&` and `||`. A condition therefore holds only property
+names, number literals and tuples; comparisons may be chained (`1.0 <= x <= 5.0`). It cannot use
+a variable (`photons > threshold` reads `e.threshold`), a function (`abs(x)`), arithmetic
+(`x + y`), `!`, a range (`frame in 1:10`) or the operators `≤` and `≥`; each throws a
+FieldError. For those, filter the emitters directly:
 
-# Compound conditions
-good_fits = @filter(smld, σ_x < 0.02 && σ_y < 0.02)
-roi = @filter(smld, 1.0 <= x <= 5.0 && 1.0 <= y <= 5.0)
+    BasicSMLD(filter(e -> e.photons > threshold, smld.emitters), smld.camera,
+              smld.n_frames, smld.n_datasets, copy(smld.metadata))
+
+The result has a new emitter vector, but its emitters are the input's own mutable objects:
+setting `bright.emitters[1].photons = 0` changes `smld` as well. `deepcopy` the result before
+changing emitters in place. The same holds for [`filter_roi`](@ref), [`filter_frames`](@ref)
+and [`cat_smld`](@ref).
+
+# Example
+```jldoctest
+julia> cam = IdealCamera(64, 64, 0.1);
+
+julia> smld = BasicSMLD([
+           Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=1),
+           Emitter2DFit{Float64}(3.0, 4.0, 1200.0, 12.0, 0.03, 0.03, 60.0, 2.0; frame=5),
+       ], cam, 5, 1);
+
+julia> length(@filter(smld, photons > 1100))
+1
+
+julia> length(@filter(smld, σ_x < 0.02 && frame in (1, 2)))
+1
+
+julia> length(@filter(smld, 0.5 <= x <= 5.0))
+2
 ```
 """
 macro filter(smld, expr)
@@ -51,28 +74,27 @@ macro filter(smld, expr)
 end
 
 """
-    filter_frames(smld::AbstractSMLD, frame::Integer)
-    filter_frames(smld::AbstractSMLD, frames::Union{AbstractVector,AbstractRange})
+    filter_frames(smld, frame::Integer)
+    filter_frames(smld, frames::AbstractVector)
 
-Efficiently select emitters from specified frames.
+Return a new SMLD with the emitters of one frame, or of a set of frames given as a range or a
+vector.
 
-# Arguments
-- `smld::AbstractSMLD`: Input SMLD structure
-- `frames`: Single frame number, vector of frame numbers, or range of frames
+Needs emitters with a `frame` field (`Emitter2DFit`, `Emitter3DFit`). `Emitter2D` and
+`Emitter3D` have none and throw a FieldError. The result's emitters are the input's own objects,
+as for [`@filter`](@ref).
 
-# Returns
-New AbstractSMLD containing only emitters from specified frames
+# Example
+```jldoctest
+julia> cam = IdealCamera(64, 64, 0.1);
 
-# Examples
-```julia
-# Single frame
-frame_5 = filter_frames(smld, 5)
+julia> emitters = [Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=f)
+                   for f in 1:5];
 
-# Range of frames
-early = filter_frames(smld, 1:10)
+julia> smld = BasicSMLD(emitters, cam, 5, 1);
 
-# Multiple specific frames
-selected = filter_frames(smld, [1,3,5,7])
+julia> length(filter_frames(smld, 3)), length(filter_frames(smld, 2:4)), length(filter_frames(smld, [1, 5]))
+(1, 3, 2)
 ```
 """
 function filter_frames(smld::AbstractSMLD, frame::Integer)
@@ -99,36 +121,35 @@ function filter_frames(smld::AbstractSMLD, frames::Union{AbstractVector,Abstract
 end
 
 """
-    filter_roi(smld::AbstractSMLD, x_range, y_range)
-    filter_roi(smld::AbstractSMLD, x_range, y_range, z_range)
+    filter_roi(smld, x_range, y_range)
+    filter_roi(smld, x_range, y_range, z_range)
 
-Efficiently select emitters within a region of interest.
+Return a new SMLD with the emitters inside a rectangle (2D) or a box (3D).
 
 # Arguments
-- `smld::AbstractSMLD`: Input SMLD structure
-- `x_range`: Range or tuple for x coordinates (microns)
-- `y_range`: Range or tuple for y coordinates (microns)
-- `z_range`: Optional range or tuple for z coordinates (microns)
+- `x_range`, `y_range`, `z_range`: the bounds in µm, inclusive, each a tuple `(min, max)` or a
+  range. A range's smallest and largest elements are the bounds, so `0.0:0.3:1.0` stops at 0.9.
 
-# Returns
-New AbstractSMLD containing only emitters within the specified ROI
-
-# Dimension
+# Notes
 The emitters' dimension ([`emitter_ndims`](@ref)) picks the form: the 2D form needs dimension 2
 and the 3D form dimension 3, for SMLMCore's emitter types and for emitter types from other
 packages alike. Empty data whose dimension is `nothing` give an empty result from either form.
 Otherwise an `ErrorException` is thrown: "2D ROI cannot be applied to 3D emitter type" (or its
 3D counterpart) for data of the other dimension, and "2D ROI cannot be applied to mixed 2D/3D
-emitters" (or its 3D counterpart) for mixed data.
+emitters" (or its 3D counterpart) for mixed data. The result's emitters are the input's own
+objects, as for [`@filter`](@ref).
 
-# Examples
-```julia
-# 2D ROI
-region = filter_roi(smld, 1.0:5.0, 2.0:6.0)
-region = filter_roi(smld, (1.0, 5.0), (2.0, 6.0))
+# Example
+```jldoctest
+julia> cam = IdealCamera(64, 64, 0.1);
 
-# 3D ROI
-volume = filter_roi(smld, 1.0:5.0, 2.0:6.0, -1.0:1.0)
+julia> smld = BasicSMLD([Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1);
+
+julia> length(filter_roi(smld, (0.0, 2.0), (1.0, 3.0)))
+1
+
+julia> length(filter_roi(smld, (1.5, 2.0), (1.0, 3.0)))
+0
 ```
 """
 function filter_roi(smld::AbstractSMLD, x_range, y_range)
