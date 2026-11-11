@@ -9,6 +9,16 @@ struct Float64Adaptor end
 Adapt.adapt_storage(::Float64Adaptor, x::AbstractArray{Float32}) = Float64.(x)
 Adapt.adapt_storage(::Float64Adaptor, x::Vector{Int32}) = copy(x)   # a fresh copy shows the field was adapted
 
+# A stand-in for a device array (an AbstractArray that is not an Array), and an adaptor that
+# moves every Array to it, as CuArray's Adapt rule does.
+struct FakeDeviceArray{T,N} <: AbstractArray{T,N}
+    a::Array{T,N}
+end
+Base.size(d::FakeDeviceArray) = size(d.a)
+Base.getindex(d::FakeDeviceArray, i::Int...) = d.a[i...]
+struct ToFakeDevice end
+Adapt.adapt_storage(::ToFakeDevice, x::Array) = FakeDeviceArray(x)
+
 @testset "SingleROI" begin
     @testset "Construction" begin
         # Basic construction
@@ -152,7 +162,7 @@ end
         y_corners = rand(Int32(1):Int32(500), 5)
         frame_indices = rand(Int32(1):Int32(100), 5)
 
-        @test_throws AssertionError ROIBatch(data, x_corners, y_corners, frame_indices, camera)
+        @test_throws ArgumentError ROIBatch(data, x_corners, y_corners, frame_indices, camera)
     end
 
     @testset "x_corners size mismatch error" begin
@@ -162,7 +172,7 @@ end
         y_corners = rand(Int32(1):Int32(500), 5)
         frame_indices = rand(Int32(1):Int32(100), 5)
 
-        @test_throws AssertionError ROIBatch(data, x_corners, y_corners, frame_indices, camera)
+        @test_throws DimensionMismatch ROIBatch(data, x_corners, y_corners, frame_indices, camera)
     end
 
     @testset "y_corners size mismatch error" begin
@@ -172,7 +182,7 @@ end
         y_corners = rand(Int32(1):Int32(500), 7)  # Wrong n_rois
         frame_indices = rand(Int32(1):Int32(100), 5)
 
-        @test_throws AssertionError ROIBatch(data, x_corners, y_corners, frame_indices, camera)
+        @test_throws DimensionMismatch ROIBatch(data, x_corners, y_corners, frame_indices, camera)
     end
 
     @testset "Frame indices size mismatch error" begin
@@ -182,7 +192,7 @@ end
         y_corners = rand(Int32(1):Int32(500), 5)
         frame_indices = rand(Int32(1):Int32(100), 3)  # Wrong count
 
-        @test_throws AssertionError ROIBatch(data, x_corners, y_corners, frame_indices, camera)
+        @test_throws DimensionMismatch ROIBatch(data, x_corners, y_corners, frame_indices, camera)
     end
 end
 
@@ -372,17 +382,15 @@ end
 
     batch = ROIBatch(data, x_corners, y_corners, frames, camera)
 
-    @testset "Adapt.adapt_structure transforms storage" begin
+    @testset "Adapt.adapt_structure transforms data only" begin
         adapted = adapt(Float64Adaptor(), batch)
         @test adapted isa ROIBatch
         @test adapted.data isa Array{Float64,3}
         @test adapted.data == Float64.(batch.data)
-        @test adapted.x_corners == batch.x_corners
-        @test adapted.x_corners !== batch.x_corners
-        @test adapted.y_corners == batch.y_corners
-        @test adapted.y_corners !== batch.y_corners
-        @test adapted.frame_indices == batch.frame_indices
-        @test adapted.frame_indices !== batch.frame_indices
+        # The corners and frame indices stay on the host: not passed through Adapt
+        @test adapted.x_corners === batch.x_corners
+        @test adapted.y_corners === batch.y_corners
+        @test adapted.frame_indices === batch.frame_indices
         @test adapted.x_corners isa Vector{Int32}
         @test adapted.y_corners isa Vector{Int32}
         @test adapted.frame_indices isa Vector{Int32}
@@ -401,6 +409,19 @@ end
         @test adapted.frame_indices isa Vector{Int32}
         @test adapted.camera === batch.camera  # Camera stays on host
         @test adapted.roi_size === batch.roi_size
+    end
+
+    @testset "Adapt to a device array type" begin
+        # A stand-in for a GPU array: an AbstractArray that is not an Array, with an Adapt rule
+        # that moves every Array to it, as CuArray's rule does.
+        adapted = adapt(ToFakeDevice(), batch)
+        @test adapted isa ROIBatch{Float32,3,FakeDeviceArray{Float32,3}}
+        @test adapted.data.a == batch.data
+        @test adapted.x_corners === batch.x_corners
+        @test adapted.y_corners === batch.y_corners
+        @test adapted.frame_indices === batch.frame_indices
+        @test adapted.camera === batch.camera
+        @test length(adapted) == n_rois
     end
 end
 

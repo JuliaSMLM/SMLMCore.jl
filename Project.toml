@@ -1,7 +1,7 @@
 name = "SMLMCore"
 uuid = "240e48d6-ab50-4b9c-b28c-b5763f96a46b"
 authors = ["klidke@unm.edu"]
-version = "0.1.0-DEV"
+version = "0.1.1-DEV"
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
@@ -17,9 +17,11 @@ Documenter = "1"
 ExplicitImports = "1"
 Pkg = "1"
 Random = "1"
-# Guard against two copies of each type beside pre-split SMLMData 0.7.0 or 0.7.1.
+# Guard against two copies of each type beside pre-split SMLMData 0.7.1 or earlier.
 SMLMData = ">= 0.7.2"
-StaticArrays = "1"
+# The lowest StaticArrays that loads on Julia 1.10: earlier ones import a name that
+# StaticArraysCore 1.4.5 no longer defines.
+StaticArrays = "1.9.8"
 TOML = "1"
 Test = "1"
 julia = "1.10"

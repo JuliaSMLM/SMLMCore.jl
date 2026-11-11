@@ -1,48 +1,30 @@
 """
     SMLMCore
 
-A Julia package for working with Single Molecule Localization Microscopy (SMLM) data.
+Types for single molecule localization microscopy (SMLM) data: emitters (localizations),
+cameras, ROI batches and SMLD containers, with coordinate conversions, filters, and functions
+that combine data sets. Lengths are in µm.
 
-File io (SMITE) is in SMLMio, and SMLMData loads both SMLMCore and SMLMio.
+# Example
+```jldoctest
+julia> cam = IdealCamera(512, 512, 0.1);
 
-# Features
-- Type system for emitters, cameras, and localization data
-- Physical coordinate handling (microns) with camera pixel mappings
-- Filtering and ROI selection tools
-- Memory-efficient data structures
+julia> emitters = [
+           Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0),
+           Emitter2DFit{Float64}(3.0, 4.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0),
+       ];
 
-# Basic Usage
-```julia
-using SMLMCore
+julia> smld = BasicSMLD(emitters, cam, 1, 1);
 
-# Create a camera
-cam = IdealCamera(1:512, 1:512, 0.1)  # 512x512 camera with 0.1 micron pixels
-
-# Create some emitters
-emitters = [
-    Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0),
-    Emitter2DFit{Float64}(3.0, 4.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0)
-]
-
-# Create SMLD object
-smld = BasicSMLD(emitters, cam, 1, 1, Dict{String,Any}())
-
-# Filter operations
-roi = filter_roi(smld, 0.0:2.0, 1.0:3.0)
-bright = @filter(smld, photons > 1000)
+julia> length(@filter(smld, photons > 1100)), length(filter_roi(smld, (0.0, 2.0), (1.0, 3.0)))
+(1, 1)
 ```
 
-# API Overview
-For a comprehensive overview of the API, use the help mode on `SMLMCore.api_overview`:
+`SMLMCore.api_overview()` returns an overview of the whole API as a `String`; the same text is
+its help entry:
 
-```julia
-?SMLMCore.api_overview
-```
-
-Or access the complete API documentation programmatically:
-
-```julia
-docs = SMLMCore.api_overview()
+```julia-repl
+help?> SMLMCore.api_overview
 ```
 """
 module SMLMCore
@@ -53,7 +35,7 @@ export
     AbstractEmitter,
     AbstractCamera,
     AbstractSMLD,
-    SMLD,  # Deprecated alias for AbstractSMLD
+    SMLD,  # Alias of AbstractSMLD, kept for code written against SMLMData
 
     # Ecosystem abstract types (tuple pattern)
     AbstractSMLMConfig,

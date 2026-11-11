@@ -1,47 +1,19 @@
 """
     AbstractCamera
 
-Abstract base type for all camera implementations in single molecule localization microscopy (SMLM).
+Supertype of all camera types. A camera gives the pixel geometry of the full image.
 
-# Interface Requirements
-
-Any concrete subtype of AbstractCamera must provide:
-
-1. Field Requirements:
-   - `pixel_edges_x::Vector{<:Real}`: Vector of pixel edge positions in x direction
-   - `pixel_edges_y::Vector{<:Real}`: Vector of pixel edge positions in y direction
-
-2. Units:
-   - All edge positions must be in physical units (microns)
-   - Origin (0,0) corresponds to the top-left corner of the camera
-   - For a camera with N×M pixels, there will be N+1 x-edges and M+1 y-edges
-
-3. Coordinate Convention:
-   - Pixel (1,1) is centered at (pixel_size_x/2, pixel_size_y/2) microns
-   - Edge positions define the boundaries of pixels in physical space
-   - First edge position corresponds to the left/top edge of the first pixel
-   - Last edge position corresponds to the right/bottom edge of the last pixel
-
-# Notes
-- Edge positions must be monotonically increasing
-- The number of edges must be one more than the number of pixels in each dimension
-- While pixels are typically uniform in size, this is not a requirement of the interface
+A concrete camera type has the fields `pixel_edges_x` and `pixel_edges_y`: the pixel edges in µm,
+increasing, `N + 1` of them for `N` pixels, starting at the camera's top-left corner, `(0, 0)`.
+Pixels need not be uniform. Constructors do not check that the edges increase from 0;
+`physical_to_pixel*` and the uniform-pixel formulas assume it, and the cameras' displays assume
+uniform pixels (they report the first pixel's width).
+[Pixels and coordinates](@ref) gives the convention.
 """
 abstract type AbstractCamera end
 
-"""
-    compute_edges_1d(centers::AbstractUnitRange, pixel_size::T) where T<:Real
-
-Compute pixel edges in one dimension. Maintains the numeric type of pixel_size.
-The first edge starts at 0 and each pixel has width pixel_size.
-
-# Arguments
-- `centers::AbstractUnitRange`: Range of pixel center indices
-- `pixel_size::T`: Size of pixels in microns
-
-# Returns
-Vector{T}: Edge positions in physical units (microns), starting at 0
-"""
+# Edges of `length(centers)` pixels of width `pixel_size` (µm), the first at 0, in the type of
+# `pixel_size`. Only the length of `centers` is used.
 function compute_edges_1d(centers::AbstractUnitRange, pixel_size::T) where T<:Real
     n_centers = length(centers)
     edges = Vector{T}(undef, n_centers + 1)
@@ -58,9 +30,20 @@ function compute_edges_1d(centers::AbstractUnitRange, pixel_size::T) where T<:Re
 end
 
 """
-    compute_bin_edges(centers_x::AbstractUnitRange, centers_y::AbstractUnitRange, pixel_size::T) where T
+    compute_bin_edges(centers_x, centers_y, pixel_size) -> (edges_x, edges_y)
 
-Compute pixel edges in both dimensions. Returns vectors with same type as pixel_size.
+Return the pixel edges in x and y (µm) of `length(centers_x)` × `length(centers_y)` pixels of
+`pixel_size` µm, the first edge at 0.
+
+`pixel_size` is a number (square pixels) or a tuple `(size_x, size_y)` (rectangular pixels).
+Only the lengths of `centers_x` and `centers_y` (`AbstractUnitRange`s) are used. Each edge
+vector has the type of its pixel size.
+
+# Example
+```jldoctest
+julia> compute_bin_edges(1:3, 1:2, (0.5, 0.25))
+([0.0, 0.5, 1.0, 1.5], [0.0, 0.25, 0.5])
+```
 """
 function compute_bin_edges(centers_x::AbstractUnitRange, centers_y::AbstractUnitRange, pixel_size::T) where T
     edges_x = compute_edges_1d(centers_x, pixel_size)
@@ -68,19 +51,6 @@ function compute_bin_edges(centers_x::AbstractUnitRange, centers_y::AbstractUnit
     return edges_x, edges_y
 end
 
-"""
-    compute_bin_edges(centers_x::AbstractUnitRange, centers_y::AbstractUnitRange, pixel_size::Tuple{Real, Real})
-
-Compute pixel edges in both dimensions for rectangular pixels.
-
-# Arguments
-- `centers_x::AbstractUnitRange`: Range of pixel center indices in x
-- `centers_y::AbstractUnitRange`: Range of pixel center indices in y
-- `pixel_size::Tuple{Real, Real}`: Tuple of (x_size, y_size) in microns
-
-# Returns
-Tuple{Vector{Float64}, Vector{Float64}}: (edges_x, edges_y) in physical units (microns)
-"""
 function compute_bin_edges(centers_x::AbstractUnitRange, centers_y::AbstractUnitRange, pixel_size::Tuple{Real, Real})
     edges_x = compute_edges_1d(centers_x, pixel_size[1])
     edges_y = compute_edges_1d(centers_y, pixel_size[2])
@@ -90,47 +60,47 @@ end
 """
     IdealCamera{T} <: AbstractCamera
 
-Represents an ideal camera with regularly spaced pixels defined by their edges in physical units (microns).
+A camera with a regular pixel grid and Poisson noise only, defined by its pixel edges.
 
 # Fields
-- `pixel_edges_x::Vector{T}`: Physical positions of pixel edges in x direction (microns)
-- `pixel_edges_y::Vector{T}`: Physical positions of pixel edges in y direction (microns)
+- `pixel_edges_x::Vector{T}`: pixel edges in x (µm), from 0, one more than the number of pixels
+- `pixel_edges_y::Vector{T}`: pixel edges in y (µm), from 0, one more than the number of pixels
 
-The edges are computed from pixel centers, where pixel (1,1) is centered at 
-(pixel_size_x/2, pixel_size_y/2) in physical coordinates.
+Pixel `(x, y) = (col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm, where `Δx` and
+`Δy` are the pixel sizes; see [Pixels and coordinates](@ref).
+
+# Constructors
+- `IdealCamera(nx, ny, pixel_size)`: `nx` × `ny` pixels of `pixel_size` µm at the sample.
+  `pixel_size` is a number (square pixels) or a tuple `(size_x, size_y)` of one type
+  (rectangular pixels); `T` is its type.
+- `IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)`: the same, with the pixel counts
+  given as `AbstractUnitRange`s. Only their lengths are used; the edges always start at 0, so
+  `101:612` gives the same camera as `1:512`.
+- `IdealCamera(pixel_edges_x, pixel_edges_y)`: from the edges themselves (µm, `Vector{T}`).
+
+# Example
+```jldoctest
+julia> cam = IdealCamera(512, 512, 0.1)
+IdealCamera{Float64} with:
+  Dimensions: 512 × 512 pixels
+  Pixel size: 0.1 μm
+  Field of view: 51.2 × 51.2 μm
+
+julia> cam.pixel_edges_x[1:3]
+3-element Vector{Float64}:
+ 0.0
+ 0.1
+ 0.2
+```
+
+# See also
+[`SCMOSCamera`](@ref), [`get_pixel_centers`](@ref)
 """
 struct IdealCamera{T} <: AbstractCamera
     pixel_edges_x::Vector{T}  # pixel edges in x
     pixel_edges_y::Vector{T}  # pixel edges in y
 end
 
-"""
-    IdealCamera(pixel_centers_x::AbstractUnitRange, pixel_centers_y::AbstractUnitRange, pixel_size::T) where T<:Real
-
-Construct an IdealCamera with square pixels given pixel center positions and a scalar pixel size.
-
-# Arguments
-- `pixel_centers_x::AbstractUnitRange`: Range of pixel center indices in x (typically 1:N)
-- `pixel_centers_y::AbstractUnitRange`: Range of pixel center indices in y (typically 1:M)
-- `pixel_size::Real`: Size of pixels in microns
-
-# Returns
-IdealCamera{T} where T matches the type of pixel_size
-
-# Type Parameters
-- `T`: Numeric type for all spatial measurements (e.g., Float64, Float32)
-
-# Example
-```julia
-# Create a 512x512 camera with 0.1 micron square pixels
-cam = IdealCamera(1:512, 1:512, 0.1)
-
-# Create with Float32 precision
-cam32 = IdealCamera(1:512, 1:512, 0.1f0)
-```
-
-Note: Pixel (1,1) is centered at (pixel_size/2, pixel_size/2) in physical coordinates.
-"""
 function IdealCamera(pixel_centers_x::AbstractUnitRange, 
                     pixel_centers_y::AbstractUnitRange, 
                     pixel_size::T) where T<:Real
@@ -138,34 +108,6 @@ function IdealCamera(pixel_centers_x::AbstractUnitRange,
     return IdealCamera{T}(edges_x, edges_y)
 end
 
-"""
-    IdealCamera(pixel_centers_x::AbstractUnitRange, pixel_centers_y::AbstractUnitRange, 
-                pixel_size::Tuple{T, T}) where T<:Real
-
-Construct an IdealCamera with rectangular pixels given pixel center positions and x,y pixel sizes.
-
-# Arguments
-- `pixel_centers_x::AbstractUnitRange`: Range of pixel center indices in x (typically 1:N)
-- `pixel_centers_y::AbstractUnitRange`: Range of pixel center indices in y (typically 1:M)
-- `pixel_size::Tuple{T, T}`: Tuple of (x_size, y_size) in microns
-
-# Returns
-IdealCamera{T} where T matches the type of the pixel sizes
-
-# Type Parameters
-- `T`: Numeric type for all spatial measurements (e.g., Float64, Float32)
-
-# Example
-```julia
-# Create a 512x256 camera with rectangular pixels (0.1 x 0.15 microns)
-cam = IdealCamera(1:512, 1:256, (0.1, 0.15))
-
-# Create with Float32 precision
-cam32 = IdealCamera(1:512, 1:256, (0.1f0, 0.15f0))
-```
-
-Note: Pixel (1,1) is centered at (pixel_size[1]/2, pixel_size[2]/2) in physical coordinates.
-"""
 function IdealCamera(pixel_centers_x::AbstractUnitRange,
                     pixel_centers_y::AbstractUnitRange,
                     pixel_size::Tuple{T, T}) where T<:Real
@@ -174,56 +116,12 @@ function IdealCamera(pixel_centers_x::AbstractUnitRange,
     return IdealCamera{T}(edges_x, edges_y)
 end
 
-"""
-    IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::T) where T<:Real
-
-Construct an IdealCamera with square pixels directly from the number of pixels and pixel size.
-
-# Arguments
-- `n_pixels_x::Integer`: Number of pixels in x dimension
-- `n_pixels_y::Integer`: Number of pixels in y dimension
-- `pixel_size::Real`: Size of pixels in microns
-
-# Returns
-IdealCamera{T} where T matches the type of pixel_size
-
-# Example
-```julia
-# Create a 512x512 camera with 0.1 micron square pixels
-cam = IdealCamera(512, 512, 0.1)
-
-# Create with Float32 precision
-cam32 = IdealCamera(512, 512, 0.1f0)
-```
-"""
 function IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::T) where T<:Real
     pixel_centers_x = 1:n_pixels_x
     pixel_centers_y = 1:n_pixels_y
     return IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)
 end
 
-"""
-    IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::Tuple{T, T}) where T<:Real
-
-Construct an IdealCamera with rectangular pixels directly from the number of pixels and x,y pixel sizes.
-
-# Arguments
-- `n_pixels_x::Integer`: Number of pixels in x dimension
-- `n_pixels_y::Integer`: Number of pixels in y dimension
-- `pixel_size::Tuple{T, T}`: Tuple of (x_size, y_size) in microns
-
-# Returns
-IdealCamera{T} where T matches the type of the pixel sizes
-
-# Example
-```julia
-# Create a 512x256 camera with rectangular pixels (0.1 x 0.15 microns)
-cam = IdealCamera(512, 256, (0.1, 0.15))
-
-# Create with Float32 precision
-cam32 = IdealCamera(512, 256, (0.1f0, 0.15f0))
-```
-"""
 function IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::Tuple{T, T}) where T<:Real
     pixel_centers_x = 1:n_pixels_x
     pixel_centers_y = 1:n_pixels_y
@@ -270,132 +168,60 @@ end
 """
     SCMOSCamera{T<:Real} <: AbstractCamera
 
-sCMOS camera with pixel-dependent calibration parameters matching spec sheets.
+An sCMOS camera: the pixel geometry and the calibration of each pixel, in the units of a
+camera's specification sheet.
 
 # Fields
-- `pixel_edges_x::Vector{T}`: Physical pixel edges in x (μm)
-- `pixel_edges_y::Vector{T}`: Physical pixel edges in y (μm)
-- `offset::Union{T, Matrix{T}}`: Dark level (ADU)
-- `gain::Union{T, Matrix{T}}`: Conversion gain (e⁻/ADU)
-- `readnoise::Union{T, Matrix{T}}`: Read noise (e⁻ rms)
-- `qe::Union{T, Matrix{T}}`: Quantum efficiency (0-1)
+- `pixel_edges_x::Vector{T}`, `pixel_edges_y::Vector{T}`: pixel edges (µm), as for
+  [`IdealCamera`](@ref)
+- `offset::Union{T, Matrix{T}}`: dark level (ADU)
+- `gain::Union{T, Matrix{T}}`: conversion gain (e⁻/ADU)
+- `readnoise::Union{T, Matrix{T}}`: read noise (e⁻ rms)
+- `qe::Union{T, Matrix{T}}`: quantum efficiency (0 to 1)
 
-# Units
-
-Calibration parameters follow camera specification sheet conventions:
-
-- **offset**: ADU (analog-to-digital units)
-  - Typical values: 100-500 ADU
-  - Dark level with no illumination
-
-- **gain**: e⁻/ADU (electrons per ADU)
-  - Typical values: 0.1-2.0 e⁻/ADU depending on readout mode
-  - Example: ORCA-Flash4.0: 0.46 e⁻/ADU (12-bit), 0.11 e⁻/ADU (16-bit)
-
-- **readnoise**: e⁻ rms (electrons, root-mean-square)
-  - Typical values: 0.3-5.0 e⁻ rms
-  - Example: ORCA-Flash4.0 V3: 1.6 e⁻ rms
-  - Example: ORCA-Quest qCMOS: 0.27 e⁻ rms
-
-- **qe**: dimensionless (0 to 1)
-  - Typical values: 0.5-0.95 at peak wavelength
-  - Example: ORCA-Flash4.0 V2: 0.72 at 550nm
-  - Example: ORCA-Fusion BT: 0.95 (back-thinned)
-
-# Physical Signal Chain
-
-Photons → Electrons → ADU:
-```
-Incident photons (N)
-  ↓ [× QE]
-Photoelectrons (N × QE)
-  ↓ [+ readnoise (Gaussian)]
-Signal electrons (N × QE + ε), where ε ~ N(0, readnoise²)
-  ↓ [÷ gain, + offset]
-ADU readout = (N × QE + ε)/gain + offset
-```
-
-# Scalar vs Matrix Parameters
-
-Each calibration parameter can be:
-- **Scalar** (T): Uniform across sensor (approximation or post-calibration)
-- **Matrix** (Matrix{T}): Per-pixel calibration map (size must match pixel grid)
-
-Use matrices for:
-- Precision SMLM (2-5% variations can affect results)
-- Quantitative imaging
-- Artifact correction
-
-Use scalars for:
-- Quick analysis
-- Post-calibrated data
-- Uniform approximation
+Each calibration field is a scalar, the same for every pixel, or a map of size `(ny, nx)` indexed
+`[row, col] = [y, x]`, the same order as the camera image. A square sensor's map cannot be
+checked for orientation: a transposed map is accepted silently. [sCMOS calibration](@ref) gives
+the signal chain these parameters describe.
 
 # Constructors
+- `SCMOSCamera(nx, ny, pixel_size, readnoise; offset=zero(T), gain=one(T), qe=one(T))`: `nx` ×
+  `ny` pixels of `pixel_size` µm at the sample, a number or a tuple `(size_x, size_y)`.
+- `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset=zero(T), gain=one(T), qe=one(T))`:
+  from pixel edges (µm, `Vector{T}`), which need not be uniform; `readnoise` is required.
 
-```julia
-# Minimal - most common case (requires readnoise, others default to 0, 1, 1)
-cam = SCMOSCamera(512, 512, 0.1, 1.6)
+`pixel_size` (or the edges), `readnoise`, `offset`, `gain` and `qe` share one number type `T`,
+the type of `pixel_size`: write `offset = 100.0`, not `100`, and pass maps as `Matrix{T}`. A call
+that mixes number types fails: with an `UndefVarError` (`T` not defined) when scalars of
+different types are passed positionally, a `MethodError` for a map of another element type, and
+a `TypeError` for a keyword. A map of the wrong size throws a `DimensionMismatch`.
 
-# With additional parameters
-cam = SCMOSCamera(512, 512, 0.1, readnoise_map,
-                  offset=100.0, gain=0.46, qe=0.72)
-
-# Custom edges (advanced)
-cam = SCMOSCamera(custom_edges_x, custom_edges_y,
-                  readnoise=noise_map, gain=gain_map)
+# Example
+A 2048 × 2048 sensor of 6.5 µm pixels behind a 100× objective has pixels of 0.065 µm at the
+sample:
+```jldoctest
+julia> SCMOSCamera(2048, 2048, 0.065, 1.6; offset = 100.0, gain = 0.46, qe = 0.72)
+SCMOSCamera{Float64} with:
+  Dimensions: 2048 × 2048 pixels
+  Pixel size: 0.065 μm
+  Offset: uniform
+  Gain: uniform
+  Read noise: uniform
+  QE: uniform
 ```
 
-# Examples
+A read-noise map for a sensor of 512 columns and 256 rows has size `(256, 512)`:
+```jldoctest
+julia> readnoise_map = fill(1.6, 256, 512);
 
-```julia
-# Example 1: From spec sheet (ORCA-Flash4.0 V3, 12-bit mode)
-cam = SCMOSCamera(
-    2048, 2048, 0.065,  # 2048×2048 pixels, 65nm pixel size
-    1.6,                 # From spec: 1.6 e⁻ rms readnoise
-    offset = 100.0,      # Typical offset
-    gain = 0.46,         # From spec: 0.46 e⁻/ADU
-    qe = 0.72            # 72% QE at 550nm
-)
+julia> cam = SCMOSCamera(512, 256, 0.1, readnoise_map; offset = 100.0, gain = 0.5);
 
-# Example 2: With calibration maps (precision SMLM)
-readnoise_map = load("camera_noise.mat")  # 512×512 measured values
-gain_map = load("camera_gain.mat")
-qe_map = load("camera_qe.mat")
-
-cam = SCMOSCamera(
-    512, 512, 0.1, readnoise_map,
-    gain = gain_map,
-    qe = qe_map
-)
-
-# Example 3: Minimal (variance-only approximation)
-# Common when you only have noise map, assume ideal otherwise
-cam = SCMOSCamera(512, 512, 0.1, readnoise_map)
-
-# Example 4: Ultra-low noise camera (ORCA-Quest)
-cam = SCMOSCamera(
-    2304, 4096, 0.0044,  # 4.4μm pixels
-    0.27,                 # Incredible 0.27 e⁻ rms!
-    offset = 100.0,
-    gain = 0.5,
-    qe = 0.85
-)
-
-# Example 5: Rectangular pixels
-cam = SCMOSCamera(512, 256, (0.1, 0.15), 1.8)
-
-# Example 6: Mixed scalar/matrix parameters
-cam = SCMOSCamera(
-    512, 512, 0.1, readnoise_map,  # Per-pixel noise
-    offset = 100.0,                 # Uniform offset
-    gain = 0.5,                     # Uniform gain
-    qe = qe_map                     # Per-pixel QE
-)
+julia> size(cam.readnoise), cam.offset
+((256, 512), 100.0)
 ```
 
-# See Also
-[`IdealCamera`](@ref) for Poisson-only noise (readnoise=0)
+# See also
+[`IdealCamera`](@ref)
 """
 struct SCMOSCamera{T<:Real} <: AbstractCamera
     pixel_edges_x::Vector{T}
@@ -406,40 +232,6 @@ struct SCMOSCamera{T<:Real} <: AbstractCamera
     qe::Union{T, Matrix{T}}
 end
 
-"""
-    SCMOSCamera(nx, ny, pixel_size, readnoise; offset=0, gain=1, qe=1)
-
-Construct sCMOS camera from pixel dimensions and calibration parameters.
-
-# Arguments
-- `nx::Integer`: Number of pixels in x
-- `ny::Integer`: Number of pixels in y
-- `pixel_size::Union{T, Tuple{T,T}}`: Pixel size in μm (scalar or (x_size, y_size))
-- `readnoise::Union{T, Matrix{T}}`: Read noise in e⁻ rms (required)
-
-# Keywords
-- `offset::Union{T, Matrix{T}} = 0`: Dark level in ADU
-- `gain::Union{T, Matrix{T}} = 1`: Conversion gain in e⁻/ADU
-- `qe::Union{T, Matrix{T}} = 1`: Quantum efficiency (0-1)
-
-Each parameter can be scalar (uniform) or Matrix{T} with size (ny, nx) following Julia's [row, col] convention.
-
-# Examples
-```julia
-# Minimal: just readnoise (assumes calibrated data: offset=0, gain=1, qe=1)
-cam = SCMOSCamera(512, 512, 0.1, 1.6)
-
-# From spec sheet (ORCA-Flash4.0 V3)
-cam = SCMOSCamera(2048, 2048, 0.065, 1.6, offset=100.0, gain=0.46, qe=0.72)
-
-# With calibration maps
-cam = SCMOSCamera(512, 512, 0.1, readnoise_map,
-                  offset=offset_map, gain=gain_map, qe=qe_map)
-
-# Rectangular pixels
-cam = SCMOSCamera(512, 256, (0.1, 0.15), 1.8)
-```
-"""
 function SCMOSCamera(
     nx::Integer,
     ny::Integer,
@@ -468,31 +260,6 @@ function SCMOSCamera(
     return SCMOSCamera{T}(edges_x, edges_y, offset, gain, readnoise, qe)
 end
 
-"""
-    SCMOSCamera(pixel_edges_x, pixel_edges_y; offset=0, gain=1, readnoise, qe=1)
-
-Construct sCMOS camera with custom pixel edge positions.
-
-# Arguments
-- `pixel_edges_x::Vector{T}`: Pixel edge positions in x (μm), length nx+1
-- `pixel_edges_y::Vector{T}`: Pixel edge positions in y (μm), length ny+1
-
-# Keywords
-- `readnoise::Union{T, Matrix{T}}`: Read noise in e⁻ rms (required)
-- `offset::Union{T, Matrix{T}} = 0`: Dark level in ADU
-- `gain::Union{T, Matrix{T}} = 1`: Conversion gain in e⁻/ADU
-- `qe::Union{T, Matrix{T}} = 1`: Quantum efficiency (0-1)
-
-Matrix parameters must have size (ny, nx) following Julia's [row, col] convention, where nx = length(pixel_edges_x) - 1 and ny = length(pixel_edges_y) - 1.
-
-# Example
-```julia
-# Custom non-uniform pixel grid
-edges_x = [0.0, 0.1, 0.21, 0.33, 0.46]  # Non-uniform spacing
-edges_y = [0.0, 0.1, 0.2, 0.3]
-cam = SCMOSCamera(edges_x, edges_y, readnoise=1.5, gain=0.5)
-```
-"""
 function SCMOSCamera(
     pixel_edges_x::Vector{T},
     pixel_edges_y::Vector{T};

@@ -2,46 +2,47 @@
     cat_smld(smlds::Vector{<:AbstractSMLD})
     cat_smld(smlds::AbstractSMLD...)
 
-Concatenate multiple SMLD objects into a single SMLD.
-
-# Arguments
-- `smlds`: Vector of AbstractSMLD objects or multiple AbstractSMLD arguments
+Concatenate SMLDs into one, keeping every emitter's frame and dataset numbers.
 
 # Returns
-New AbstractSMLD containing all emitters from inputs
+- A new SMLD of the first input's type that holds every input's emitters, in order.
 
 # Notes
-- Camera must be identical across all SMLDs: the same type and equal values in every field,
-  calibration included. Numbers, arrays, dictionaries, tuples, immutable structs and wrapped
-  cameras compare by value (NaN equals NaN); any other object in a camera field compares with
-  its own `==`, which for a mutable struct without a `==` method means the same object. A
-  plain-bits field that a camera's constructor leaves unset holds whatever was in memory, so it
-  can make two otherwise equal cameras differ. The error names the input and the fields that differ
-- All inputs must hold the same emitter type
-- n_frames is set to the largest `n_frames` of the inputs
-- n_datasets is set to the largest `n_datasets` of the inputs
-- Metadata from first SMLD is used, with conflicts noted in metadata
+- The cameras must be the same: the same type and equal values in every field, calibration
+  included (a scalar and a uniform map of the same value differ). Otherwise an `ErrorException`
+  names the input and the fields that differ.
+- All inputs must hold the same emitter type.
+- `n_frames` and `n_datasets` are the largest of the inputs'.
+- Metadata is a copy of the first input's, plus `"concatenated_from" => number of inputs`. The
+  other inputs' metadata are dropped.
+- The result's emitters are the inputs' own objects (see [`@filter`](@ref)).
+- With one input, the result is a new SMLD with a new emitter vector and the
+  `"concatenated_from"` key, as with several. An empty vector throws an `ErrorException`.
+- `cat_smld(xs)` gives the same emitters, `n_frames` and `n_datasets` as `merge_smld(xs)`
+  without renumbering; only the metadata keys differ.
 
-# Examples
-```julia
-# Concatenate two SMLDs
-combined = cat_smld(smld1, smld2)
+# Example
+```jldoctest
+julia> cam = IdealCamera(64, 64, 0.1);
 
-# Concatenate multiple SMLDs
-combined = cat_smld(smld1, smld2, smld3)
+julia> a = BasicSMLD([Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1);
 
-# Concatenate vector of SMLDs
-combined = cat_smld([smld1, smld2, smld3])
+julia> b = BasicSMLD([Emitter2DFit{Float64}(3.0, 4.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0)], cam, 1, 1);
+
+julia> c = cat_smld(a, b);
+
+julia> length(c), c.n_frames, c.metadata["concatenated_from"]
+(2, 1, 2)
 ```
+
+# See also
+[`merge_smld`](@ref)
 """
 function cat_smld(smlds::Vector{<:AbstractSMLD})
-    # First check emptiness before any operations
     isempty(smlds) && error("No SMLDs to concatenate")
 
-    # Then do single SMLD check
-    length(smlds) == 1 && return first(smlds)
-
-    # At this point we know we have at least 2 SMLDs
+    # One input goes through the same steps as several: the result is a new SMLD with a new
+    # emitter vector and the same metadata keys, never the input itself.
     ref_camera = smlds[1].camera
     for k in 2:length(smlds)
         is_same_camera(ref_camera, smlds[k].camera) ||
@@ -77,62 +78,68 @@ cat_smld(smlds::AbstractSMLD...) = cat_smld(collect(smlds))
     merge_smld(smlds::Vector{<:AbstractSMLD}; adjust_frames=false, adjust_datasets=false)
     merge_smld(smlds::AbstractSMLD...; adjust_frames=false, adjust_datasets=false)
 
-Merge multiple SMLD objects with options to adjust frame and dataset numbering.
+Merge SMLDs into one, optionally renumbering frames or datasets so that the inputs stay apart.
 
-# Arguments
-- `smlds`: Vector of AbstractSMLD objects or multiple AbstractSMLD arguments
-- `adjust_frames`: If true, places each input's frames after the earlier inputs' frames
-- `adjust_datasets`: If true, places each input's datasets after the earlier inputs' datasets
+# Keyword Arguments
+- `adjust_frames=false`: place each input's frames after the earlier inputs' frames. Needs
+  emitters with a `frame` property.
+- `adjust_datasets=false`: place each input's datasets after the earlier inputs' datasets. Needs
+  emitters with a `dataset` property.
+
+`Emitter2D` and `Emitter3D` have neither property; renumbering them throws an error that names
+the missing field (a `FieldError` from Julia 1.12, an `ErrorException` before).
 
 # Returns
-New AbstractSMLD containing all emitters with adjusted numbering if requested
+- A new SMLD of the first input's type that holds every input's emitters, in order.
 
 # Notes
-- Camera must be identical across all SMLDs: the same type and equal values in every field,
-  calibration included (a scalar calibration and a uniform map of the same value differ).
-  Numbers, arrays, dictionaries, tuples, immutable structs and wrapped cameras compare by value
-  (NaN equals NaN); any other object in a camera field compares with its own `==`, which for a
-  mutable struct without a `==` method means the same object. A plain-bits field that a camera's
-  constructor leaves unset holds whatever was in memory, so it can make two otherwise equal
-  cameras differ. The error names the input and the fields that differ
-- All inputs must hold the same emitter type
-- When adjust_frames=true, each input's frame numbers move by the sum of the earlier inputs'
-  `n_frames`, and the result's `n_frames` is that sum over all inputs
-- When adjust_datasets=true, each input's dataset numbers move by the sum of the earlier inputs'
-  `n_datasets`, and the result's `n_datasets` is that sum over all inputs. An input whose emitters
-  lie in datasets `1:n_datasets` therefore keeps datasets apart from every other input; numbers an
-  input declares but does not use stay empty in the result
-- The inputs are never modified. Each renumbered emitter is a new object, one per entry, even when
-  an input lists the same emitter object more than once, and only the requested numbers change
-  (an emitter type with a `frame` field and no `dataset` field can be renumbered by frame). A
-  mutable emitter is copied field by field and its numbers are set through `setproperty!`; fields
-  that hold arrays or other objects stay shared with the input emitter (an emitter with a field
-  left undefined is deep-copied instead). An immutable emitter is rebuilt from its fields without
-  calling its constructor (fields its constructor left unset stay unset). The first input's emitters (and,
-  without renumbering, every input's) are the inputs' own objects, as in `cat_smld`
-- Metadata includes information about the merge operation
+- The cameras must be the same, by the rule in [`cat_smld`](@ref), and all inputs must hold the
+  same emitter type.
+- With `adjust_frames`, each input's frame numbers move by the sum of the earlier inputs'
+  `n_frames`, and the result's `n_frames` is that sum over all inputs; without it, `n_frames` is
+  the largest of the inputs'. `adjust_datasets` does the same for dataset numbers and
+  `n_datasets`. An input whose emitters lie in datasets `1:n_datasets` therefore keeps its
+  datasets apart from every other input's; numbers an input declares but does not use stay
+  empty in the result.
+- The inputs are never modified. Each renumbered emitter is a new object, one per entry, even
+  when an input lists the same emitter object more than once. Only the requested numbers are
+  read and changed, so an emitter type with a `frame` field and no `dataset` field can be
+  renumbered by frame, and immutable emitter types can be renumbered. Fields of a renumbered
+  emitter that hold arrays or other objects stay shared with the input emitter. The first
+  input's emitters (and, without renumbering, every input's) are the inputs' own objects, as in
+  [`cat_smld`](@ref).
+- Metadata is a copy of the first input's, plus `"merged_from"` (the number of inputs),
+  `"frame_adjustment"` and `"dataset_adjustment"` (the two keywords). The other inputs' metadata
+  are dropped.
+- With one input, the result is a new SMLD with these metadata keys, as with several; its
+  numbers do not move. An empty vector throws an `ErrorException`.
 
-# Examples
-```julia
-# Simple merge
-merged = merge_smld(smld1, smld2)
+# Example
+```jldoctest
+julia> cam = IdealCamera(64, 64, 0.1);
 
-# Merge with frame number adjustment
-merged = merge_smld(smld1, smld2, adjust_frames=true)
+julia> a = BasicSMLD([Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=3)], cam, 10, 1);
 
-# Merge multiple with both adjustments
-merged = merge_smld([smld1, smld2, smld3], 
-                   adjust_frames=true, 
-                   adjust_datasets=true)
+julia> b = BasicSMLD([Emitter2DFit{Float64}(3.0, 4.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0; frame=3)], cam, 10, 1);
+
+julia> m = merge_smld(a, b; adjust_frames = true);
+
+julia> [e.frame for e in m.emitters], m.n_frames
+([3, 13], 20)
+
+julia> b.emitters[1].frame   # the input is unchanged
+3
 ```
+
+# See also
+[`cat_smld`](@ref)
 """
 function merge_smld(smlds::Vector{<:AbstractSMLD};
     adjust_frames::Bool=false,
     adjust_datasets::Bool=false)
     isempty(smlds) && error("No SMLDs to merge")
-    length(smlds) == 1 && return first(smlds)
 
-    # Check camera compatibility
+    # Check camera compatibility (one input goes through the same steps as several)
     for k in 2:length(smlds)
         is_same_camera(smlds[1].camera, smlds[k].camera) ||
             error("Cannot merge SMLDs with different cameras: ",

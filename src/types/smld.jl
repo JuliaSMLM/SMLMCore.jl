@@ -1,19 +1,17 @@
 """
     AbstractSMLD
 
-Abstract type representing Single Molecule Localization Data (SMLD).
+Supertype of SMLD (single molecule localization data) containers: a set of emitters with the
+camera they were imaged on. Emitter positions are in µm.
 
-# Interface Requirements
+A custom SMLD type subtypes `AbstractSMLD` and has the fields `emitters`, `camera`, `n_frames`,
+`n_datasets` and `metadata::Dict{String,Any}`. It also needs a constructor
+`MySMLD(emitters, camera, n_frames, n_datasets, metadata)` (the default constructor, when the
+fields are in that order), because the filters, [`cat_smld`](@ref) and [`merge_smld`](@ref) build
+their result with `typeof(smld)(emitters, camera, n_frames, n_datasets, metadata)`. Its emitters
+meet the requirements in [`AbstractEmitter`](@ref).
 
-Any concrete subtype of AbstractSMLD must provide:
-- `emitters::Vector{<:AbstractEmitter}`: Vector of localized emitters
-
-Additional fields may include:
-- Camera information
-- Acquisition parameters
-- Analysis metadata
-
-Note: All emitter coordinates must be in physical units (microns).
+`length(smld)` is the number of emitters, and iterating an SMLD iterates its emitters.
 """
 abstract type AbstractSMLD end
 
@@ -30,48 +28,52 @@ end
 """
     SMLD
 
-Deprecated alias for `AbstractSMLD`. Use `AbstractSMLD` instead.
-This alias is provided for backward compatibility and will be removed in v1.0.
+Alias of [`AbstractSMLD`](@ref), kept for code written against SMLMData. Use `AbstractSMLD` in
+new code.
 """
 const SMLD = AbstractSMLD
 
 """
     BasicSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
 
-Basic container for single molecule localization data.
+The general-purpose SMLD container: emitters of one type, the camera they were imaged on, and
+the numbers of frames and datasets.
 
 # Fields
-- `emitters::Vector{E}`: Vector of localized emitters
-- `camera::AbstractCamera`: Camera used for acquisition
-- `n_frames::Int`: Total number of frames in acquisition
-- `n_datasets::Int`: Number of datasets in the acquisition
-- `metadata::Dict{String,Any}`: Additional dataset information
+- `emitters::Vector{E}`: the localizations
+- `camera::AbstractCamera`: the camera of the full image
+- `n_frames::Int`: number of frames in the acquisition
+- `n_datasets::Int`: number of datasets
+- `metadata::Dict{String,Any}`: any other information, by name
 
-# Type Parameters
-- `T`: Numeric type for coordinates (typically Float64)
-- `E`: Concrete emitter type
+`T` is the element type of the camera's pixel edges (not of the emitters), and `E` is the emitter
+type.
+
+# Constructors
+- `BasicSMLD(emitters, camera, n_frames, n_datasets, metadata = Dict{String,Any}())`:
+  `metadata` must be a `Dict{String,Any}`; write `Dict{String,Any}("exposure_time" => 0.1)`. A
+  plain `Dict("exposure_time" => 0.1)` is a `Dict{String,Float64}` and has no matching method.
 
 # Example
-```julia
-# Create camera
-cam = IdealCamera(1:512, 1:512, 0.1)
+```jldoctest
+julia> cam = IdealCamera(512, 512, 0.1);
 
-# Create some emitters
-emitters = [
-    Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=1),
-    Emitter2DFit{Float64}(5.0, 5.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0; frame=2)
-]
+julia> emitters = [
+           Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=1),
+           Emitter2DFit{Float64}(5.0, 5.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0; frame=2),
+       ];
 
-# Create metadata
-metadata = Dict{String,Any}(
-    "exposure_time" => 0.1,
-    "timestamp" => now(),
-    "sample" => "Test Sample"
-)
+julia> smld = BasicSMLD(emitters, cam, 2, 1, Dict{String,Any}("exposure_time" => 0.1));
 
-# Create SMLD object
-data = BasicSMLD(emitters, cam, 2, 1, metadata)
+julia> length(smld), smld.n_frames, smld.metadata["exposure_time"]
+(2, 2, 0.1)
+
+julia> print(smld)
+BasicSMLD(2 2D emitters, 2 frames)
 ```
+
+# See also
+[`AbstractSMLD`](@ref), [`@filter`](@ref), [`cat_smld`](@ref), [`merge_smld`](@ref)
 """
 struct BasicSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
     emitters::Vector{E}
@@ -81,34 +83,6 @@ struct BasicSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
     metadata::Dict{String,Any}
 end
 
-"""
-    BasicSMLD(emitters::Vector{E}, camera::AbstractCamera,
-              n_frames::Int, n_datasets::Int,
-              metadata::Dict{String,Any}=Dict{String,Any}()) where E<:AbstractEmitter
-
-Construct a BasicSMLD from a vector of emitters and required metadata.
-
-# Arguments
-- `emitters::Vector{E}`: Vector of localized emitters
-- `camera::AbstractCamera`: Camera used for acquisition
-- `n_frames::Int`: Total number of frames in acquisition
-- `n_datasets::Int`: Number of datasets in acquisition
-- `metadata::Dict{String,Any}=Dict{String,Any}()`: Optional additional information
-
-The numeric type T is inferred from the camera's pixel_edges_x type.
-
-# Example
-```julia
-# Create with minimal metadata
-data = BasicSMLD(emitters, camera, 10, 1)
-
-# Create with additional metadata
-data = BasicSMLD(emitters, camera, 10, 1, Dict(
-    "exposure_time" => 0.1,
-    "timestamp" => now()
-))
-```
-"""
 function BasicSMLD(emitters::Vector{E}, camera::AbstractCamera,
                   n_frames::Int, n_datasets::Int,
                   metadata::Dict{String,Any}=Dict{String,Any}()) where E<:AbstractEmitter
@@ -117,38 +91,19 @@ function BasicSMLD(emitters::Vector{E}, camera::AbstractCamera,
 end
 
 # Helper method to get the number of emitters
-"""
-    Base.length(smld::AbstractSMLD)
-
-Return the number of emitters in the SMLD object.
-"""
 Base.length(smld::AbstractSMLD) = length(smld.emitters)
 
 # Helper method for iteration
-"""
-    Base.iterate(smld::AbstractSMLD)
-    Base.iterate(smld::AbstractSMLD, state)
-
-Enable iteration over emitters in an SMLD object.
-"""
 Base.iterate(smld::AbstractSMLD) = iterate(smld.emitters)
 Base.iterate(smld::AbstractSMLD, state) = iterate(smld.emitters, state)
 
-"""
-    format_with_commas(n::Integer)
-
-Format an integer with thousands separators for better readability.
-"""
+# Format an integer with thousands separators, for display.
 function format_with_commas(n::Integer)
     return replace(string(n), r"(?<=[0-9])(?=(?:[0-9]{3})+(?![0-9]))" => ",")
 end
 
 
-"""
-    Base.show methods for AbstractSMLD types
-
-These methods provide informative displays of SMLD data containers in both REPL and other contexts.
-"""
+# Base.show methods for AbstractSMLD types: a compact one-line form and a detailed REPL form.
 
 # --- Generic AbstractSMLD compact show method ---
 # This works for any concrete AbstractSMLD type
@@ -205,11 +160,6 @@ end
 # --- Generic AbstractSMLD detailed show method for subtypes without specific methods ---
 
 function Base.show(io::IO, ::MIME"text/plain", smld::S) where {S<:AbstractSMLD}
-    # Skip if a more specific method exists (to avoid method ambiguities)
-    if S <: BasicSMLD
-        return
-    end
-    
     n_emitters = length(smld.emitters)
     
     # Camera info if available

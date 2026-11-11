@@ -11,8 +11,10 @@ end
 # Path to the api_overview.md file
 const _API_PATH = joinpath(_package_root(), "api_overview.md")
 
-# Load the content of the api.md file if it exists
+# Load the content of api_overview.md if it exists. It is read at precompile time, so it is
+# declared a dependency: editing it makes the precompile cache stale.
 const _API_CONTENT = if isfile(_API_PATH)
+    include_dependency(_API_PATH)
     read(_API_PATH, String)
 else
     """
