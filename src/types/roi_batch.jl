@@ -6,7 +6,7 @@ the JuliaSMLM ecosystem, enabling interoperability between SMLMBoxer, GaussMLE,
 and other analysis packages.
 """
 
-using StaticArrays
+using StaticArrays: SVector
 import Adapt
 
 """
@@ -126,7 +126,7 @@ batch_gpu = adapt(CuArray, batch)  # Transfer data to GPU
 
 # Example
 ```julia
-using SMLMData
+using SMLMCore
 using StaticArrays
 
 # Create camera

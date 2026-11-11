@@ -1,4 +1,4 @@
-using SMLMData, Test
+using SMLMCore, Test
 
 @testset "Basic Emitters" begin
     @testset "2D Emitter" begin

@@ -4,5 +4,5 @@
 ```
 
 ```@autodocs
-Modules = [SMLMData]
+Modules = [SMLMCore]
 ```

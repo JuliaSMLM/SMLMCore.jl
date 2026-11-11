@@ -1,6 +1,6 @@
-# SMLMData.jl API Overview
+# SMLMCore.jl API Overview
 
-This guide provides a structured overview of the SMLMData.jl package designed for Single Molecule Localization Microscopy (SMLM) data handling in Julia.
+This guide provides a structured overview of the SMLMCore.jl package designed for Single Molecule Localization Microscopy (SMLM) data handling in Julia.
 
 ## Why This Overview Exists
 
@@ -18,14 +18,14 @@ This guide provides a structured overview of the SMLMData.jl package designed fo
 
 ## Ecosystem Role
 
-SMLMData is the **core types package** for the [JuliaSMLM](https://github.com/JuliaSMLM) ecosystem. Other packages depend on SMLMData and re-export its types, so **you rarely need to import SMLMData directly**:
+SMLMCore is the **core types package** for the [JuliaSMLM](https://github.com/JuliaSMLM) ecosystem. Other packages depend on SMLMCore and re-export its types, so **you rarely need to import SMLMCore directly**:
 
 ```julia
 using GaussMLE      # Re-exports ROIBatch, camera types, etc.
-using SMLMAnalysis  # Re-exports all SMLMData types for analysis workflows
+using SMLMAnalysis  # Re-exports all SMLMCore types for analysis workflows
 ```
 
-Direct `using SMLMData` is primarily for package developers, standalone data manipulation, or learning the type system.
+Direct `using SMLMCore` is primarily for package developers, standalone data manipulation, or learning the type system.
 
 ## Key Concepts
 
@@ -55,8 +55,8 @@ ROI Batch Types                   # For batched ROI processing
 └── ROIBatch{T,N,A,C}             # Batch of ROIs for parallel processing
 
 AbstractSMLD                      # Base for data containers
-├── BasicSMLD{T,E}                # General-purpose container
-└── SmiteSMLD{T,E}                # SMITE-compatible container
+└── BasicSMLD{T,E}                # General-purpose container
+# Additional file io containers are in SMLMio.
 ```
 
 ## Essential Types
@@ -285,14 +285,7 @@ struct BasicSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
     metadata::Dict{String,Any} # Additional information
 end
 
-# SMITE format compatible container
-struct SmiteSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
-    emitters::Vector{E}        # Vector of emitters
-    camera::AbstractCamera     # Camera information
-    n_frames::Int              # Total number of frames
-    n_datasets::Int            # Number of datasets
-    metadata::Dict{String,Any} # Additional information
-end
+# File io containers are in SMLMio.
 ```
 
 #### SMLD Constructor Examples
@@ -370,7 +363,7 @@ roi_2d = filter_roi(smld, 1.0:5.0, 2.0:6.0)       # x_range, y_range
 # 3D ROI (for 3D emitters only)
 roi_3d = filter_roi(smld, 1.0:5.0, 2.0:6.0, -1.0:1.0)  # x, y, z ranges
 
-# Spatial dimension of emitters: what the type declares (SMLMData's emitter types declare 2 or 3), else 3 if an
+# Spatial dimension of emitters: what the type declares (SMLMCore's emitter types declare 2 or 3), else 3 if an
 # emitter has a property z (hasproperty(e, :z)) and 2 if not. A collection takes its element type's declaration, else
 # the dimension all its elements share; nothing when they disagree, or when empty and the element type declares none.
 # Works for any AbstractEmitter subtype, including types defined in other packages.
@@ -390,31 +383,18 @@ combined = cat_smld([smld1, smld2, smld3])
 merged = merge_smld(smld1, smld2)
 merged = merge_smld([smld1, smld2, smld3])
 
-# Merge with sequential frame numbers
-sequential = merge_smld([smld1, smld2, smld3], adjust_frames=true)
+# Merge with each input's frames placed after the earlier inputs' frames
+by_frame = merge_smld([smld1, smld2, smld3], adjust_frames=true)
 
-# Merge with sequential dataset numbers
-sequential_ds = merge_smld([smld1, smld2, smld3], adjust_datasets=true)
+# Merge with each input's datasets placed after the earlier inputs' datasets
+by_dataset = merge_smld([smld1, smld2, smld3], adjust_datasets=true)
+
+# Renumbering moves each input by the earlier inputs' total n_frames (n_datasets); the inputs
+# themselves are not modified. Both functions require the same camera (same type, pixels and
+# calibration) and the same emitter type.
 ```
 
-### I/O Operations
-
-```julia
-# Import from SMITE format (MATLAB)
-smd = SmiteSMD("path/to/data", "localizations.mat")  # Default variable name "SMD"
-smd = SmiteSMD("path/to/data", "localizations.mat", "CustomSMD")  # Custom variable name
-
-# Load as 2D or 3D data
-smld_2d = load_smite_2d(smd)
-smld_3d = load_smite_3d(smd)
-
-# Export to SMITE format (saved as MATLAB v7.3 format)
-# Note: requires SmiteSMLD object, not BasicSMLD
-smite_smld = SmiteSMLD(smld.emitters, smld.camera, smld.n_frames, smld.n_datasets, smld.metadata)
-save_smite(smite_smld, "output/directory", "results.mat")
-```
-
-**Note**: The SMITE loader automatically handles complex-valued fields by removing emitters with non-zero imaginary components in key fields (X, Y, Z, Photons, background, and uncertainties). Information about removed emitters is stored in the metadata as `"removed_complex_emitters" => count`.
+File io (SMITE) is in SMLMio.
 
 ### Working with SMLD Objects
 
@@ -449,12 +429,10 @@ emitters = [emitter1, emitter2]
 smld = BasicSMLD(emitters, cam, 1, 1, Dict{String,Any}())
 ```
 
-### Loading and Filtering Data
+### Filtering Data
 
 ```julia
-# Load from SMITE format
-smd = SmiteSMD("data_directory", "localizations.mat")
-smld = load_smite_2d(smd)
+# File io (SMITE) is in SMLMio.
 
 # Filter by quality
 good_fits = @filter(smld, σ_x < 0.02 && σ_y < 0.02 && photons > 500)
@@ -469,31 +447,25 @@ frames_1_10 = filter_frames(roi, 1:10)
 ### Multi-Dataset Analysis
 
 ```julia
-# Load multiple datasets
-smd1 = SmiteSMD("experiment1", "data.mat")
-smd2 = SmiteSMD("experiment2", "data.mat")
-smld1 = load_smite_2d(smd1)
-smld2 = load_smite_2d(smd2)
+# File io (SMITE) is in SMLMio.
 
 # Filter each dataset
 bright1 = @filter(smld1, photons > 1000)
 bright2 = @filter(smld2, photons > 1000)
 
-# Merge datasets with sequential frame numbering
+# Merge datasets, placing the second one's frames after the first one's
 merged = merge_smld([bright1, bright2], adjust_frames=true)
 
 # Process the merged dataset
 result = @filter(merged, σ_x < 0.02 && σ_y < 0.02)
 
-# Save the results (convert to SmiteSMLD first if needed)
-result_smite = SmiteSMLD(result.emitters, result.camera, result.n_frames, result.n_datasets, result.metadata)
-save_smite(result_smite, "analysis_results", "merged_filtered.mat")
+# File io (SMITE) is in SMLMio.
 ```
 
 ## Complete Example
 
 ```julia
-using SMLMData
+using SMLMCore
 
 # 1. Create a camera with 100nm pixels
 # Camera has 512x512 pixels, each 0.1 microns (100nm) in size
@@ -563,10 +535,7 @@ end
 - Filtering by frames with a vector uses `Set` internally for O(1) lookup performance
 - Applying an ROI filter to incompatible emitter types will throw an error
 
-### SMITE Format
-- Complex-valued fields in SMITE files are automatically handled by removing affected emitters
-- The loader adds metadata about removed emitters: `"removed_complex_emitters" => count`
-- SMITE files are saved in MATLAB v7.3 format (HDF5-based)
+File io (SMITE) is in SMLMio.
 
 ### Memory Considerations
 - Large datasets benefit from using appropriate numeric types (e.g., `Float32` vs `Float64`)

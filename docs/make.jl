@@ -1,24 +1,24 @@
-using SMLMData
+using SMLMCore
 using Documenter
 
-DocMeta.setdocmeta!(SMLMData, :DocTestSetup, :(using SMLMData); recursive=true)
+DocMeta.setdocmeta!(SMLMCore, :DocTestSetup, :(using SMLMCore); recursive=true)
 
 makedocs(;
-    modules=[SMLMData],
-    sitename="SMLMData.jl",
+    modules=[SMLMCore],
+    doctest = false, # QA runs every docstring jldoctest (admiral decision 0018)
+    sitename="SMLMCore.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://JuliaSMLM.github.io/SMLMData.jl",
+        canonical="https://JuliaSMLM.github.io/SMLMCore.jl",
         assets=String[],
     ),
     pages=[
         "Home" => "index.md",
-        "Saving and Loading" => "io.md",
         "API Reference" => "api.md",
     ],
 )
 
 deploydocs(;
-    repo="github.com/JuliaSMLM/SMLMData.jl",
+    repo="github.com/JuliaSMLM/SMLMCore.jl",
     devbranch = "main" 
 )

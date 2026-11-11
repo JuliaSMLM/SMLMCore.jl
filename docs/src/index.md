@@ -1,27 +1,27 @@
-# SMLMData.jl
+# SMLMCore.jl
 
 Data types and utilities for Single Molecule Localization Microscopy (SMLM) in Julia.
 
 ## Overview
 
-SMLMData.jl provides core data structures and operations for working with Single Molecule Localization Microscopy data. The package follows a type-based design that makes it easy to represent, manipulate, and analyze localization data.
+SMLMCore.jl provides core data structures and operations for working with Single Molecule Localization Microscopy data. The package follows a type-based design that makes it easy to represent, manipulate, and analyze localization data.
 
 ### Ecosystem Role
 
-SMLMData is the **core types package** for the [JuliaSMLM](https://github.com/JuliaSMLM) ecosystem. It defines the foundational types (emitters, cameras, SMLD containers) that all other packages share.
+SMLMCore is the **core types package** for the [JuliaSMLM](https://github.com/JuliaSMLM) ecosystem. It defines the foundational types (emitters, cameras, SMLD containers) that all other packages share. Packages that need only the types depend on SMLMCore.
 
-**You rarely need to import SMLMData directly.** Packages like `GaussMLE`, `SMLMBoxer`, and `SMLMAnalysis` depend on SMLMData and re-export the types you need:
+**You rarely need to import SMLMCore directly.** Packages like `GaussMLE`, `SMLMBoxer`, and `SMLMAnalysis` depend on SMLMCore and re-export the types you need:
 
 ```julia
 using GaussMLE      # Re-exports ROIBatch, camera types, etc.
-using SMLMAnalysis  # Re-exports all SMLMData types for analysis workflows
+using SMLMAnalysis  # Re-exports all SMLMCore types for analysis workflows
 ```
 
-Direct `using SMLMData` is primarily for package developers, standalone data manipulation, or learning the type system.
+Direct `using SMLMCore` is primarily for package developers, standalone data manipulation, or learning the type system.
 
 ## Emitters
 
-Emitters represent individual fluorophore localizations in single molecule localization microscopy. SMLMData provides several emitter types to accommodate different analysis needs.
+Emitters represent individual fluorophore localizations in single molecule localization microscopy. SMLMCore provides several emitter types to accommodate different analysis needs.
 
 ### Emitter Type Hierarchy
 
@@ -61,7 +61,7 @@ These types are useful for:
 
 ### Fit Result Emitter Types
 
-For real data analysis, SMLMData provides extended emitter types that include fit results with uncertainties and tracking information:
+For real data analysis, SMLMCore provides extended emitter types that include fit results with uncertainties and tracking information:
 
 ```julia
 mutable struct Emitter2DFit{T} <: AbstractEmitter
@@ -161,7 +161,7 @@ Cameras define the imaging system's geometry and handling of pixel coordinates.
 
 ### Camera Types
 
-SMLMData provides two camera types:
+SMLMCore provides two camera types:
 - **IdealCamera**: For detectors with Poisson noise only (e.g., EMCCD in photon-counting mode)
 - **SCMOSCamera**: For sCMOS detectors with pixel-dependent calibration parameters
 
@@ -368,29 +368,18 @@ early_frames = filter_frames(smld, 1:10)
 # Concatenate two SMLD objects
 combined = cat_smld(smld1, smld2)
 
-# Merge with sequential frame numbering
+# Merge, placing the second one's frames after the first one's
 merged = merge_smld([smld1, smld2], adjust_frames=true)
 ```
 
-## File I/O
-
-SMLMData currently supports the SMITE format, with more formats planned for future releases.
-
-```julia
-# Import from SMITE format (MATLAB)
-smd = SmiteSMD("path/to/data", "localizations.mat")
-smld_2d = load_smite_2d(smd)
-smld_3d = load_smite_3d(smd)
-
-# Export to SMITE format
-save_smite(smld, "output/directory", "results.mat")
-```
+File formats (SMITE) are in SMLMio.
+SMLMData loads SMLMCore and SMLMio and re-exports both.
 
 ## Installation
 
 ```julia
 using Pkg
-Pkg.add("SMLMData")
+Pkg.add("SMLMCore")
 ```
 
 For complete API documentation, see the [API Reference](api.md).

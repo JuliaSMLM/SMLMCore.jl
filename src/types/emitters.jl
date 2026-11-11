@@ -237,7 +237,7 @@ collection has its element type's declared dimension, or else the dimension all 
 share, and is `nothing` when they disagree or when it is empty and its element type declares
 none (`Union{}` never does).
 
-SMLMData's four emitter types declare their dimension, and so does a `Union` of its types of one
+SMLMCore's four emitter types declare their dimension, and so does a `Union` of its types of one
 dimension; for any other type the type method returns `nothing` unless the type declares one.
 Fields are never read: a type that computes `z` in `getproperty` is seen through
 `propertynames`, as Julia's convention for `getproperty` asks, and a type that stores `z` but
@@ -248,7 +248,7 @@ and is not supported.
 A type declares its dimension with a method on its type. The declaration then decides for the
 type, for its elements (whatever their properties) and for empty vectors of it:
 
-    SMLMData.emitter_ndims(::Type{<:MyLocalization{N}}) where {N} = N
+    SMLMCore.emitter_ndims(::Type{<:MyLocalization{N}}) where {N} = N
 
 A collection whose element type declares a dimension is answered from the type; otherwise every
 element is checked, stopping at the first element that differs from the first. The scan asks each
@@ -267,7 +267,7 @@ emitter_ndims(Emitter2DFit)   # 2
 emitter_ndims(smld_3d)        # 3 for an SMLD of Emitter3DFit
 
 # An emitter type defined in another package
-mutable struct MyEmitter{T} <: SMLMData.AbstractEmitter
+mutable struct MyEmitter{T} <: SMLMCore.AbstractEmitter
     x::T
     y::T
     photons::T
@@ -279,7 +279,7 @@ end
 emitter_ndims(MyEmitter(1.0, 2.0, 500.0, 1, 1, 0, 1))   # 2
 emitter_ndims(MyEmitter{Float64})                      # nothing: the type declares nothing
 
-mixed = SMLMData.AbstractEmitter[Emitter2D{Float64}(1.0, 2.0, 500.0),
+mixed = SMLMCore.AbstractEmitter[Emitter2D{Float64}(1.0, 2.0, 500.0),
                                  Emitter3D{Float64}(1.0, 2.0, 0.1, 500.0)]
 emitter_ndims(mixed)          # nothing
 ```
