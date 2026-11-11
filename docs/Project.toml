@@ -4,3 +4,6 @@ SMLMCore = "240e48d6-ab50-4b9c-b28c-b5763f96a46b"
 
 [sources]
 SMLMCore = {path = ".."}
+
+[compat]
+Documenter = "1.20.0"
