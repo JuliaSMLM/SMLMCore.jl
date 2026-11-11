@@ -12,7 +12,7 @@ emitter uncertainties.
 | position standard deviations `σ_x`, `σ_y`, `σ_z` | µm |
 | position covariances `σ_xy`, `σ_xz`, `σ_yz` | µm² |
 | `photons` of an [`Emitter2D`](@ref) or [`Emitter3D`](@ref) | photons |
-| fitted `photons` and `σ_photons` | the units of the data the fitter received (below) |
+| fitted `photons` (total in the frame) and `σ_photons` | the fitter's working units: photons, or photoelectrons for sCMOS data (below) |
 | fitted `bg` and `σ_bg` | the same units, per pixel |
 | sCMOS `offset` | ADU |
 | sCMOS `gain` | e⁻/ADU |
@@ -27,11 +27,12 @@ read noise 0.3 to 5 e⁻ rms, QE 0.5 to 0.95.
 The `photons` of an [`Emitter2D`](@ref) or [`Emitter3D`](@ref) are the photons from the emitter
 that reach the camera in the frame, before QE.
 
-In the fit types ([`Emitter2DFit`](@ref), [`Emitter3DFit`](@ref)), `photons` and `bg` are the
-fitted signal and background in the units of the data the fitter received: photons for data in
-photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref) with `qe = 1`). A fitter that
-converts `SCMOSCamera` data with `(ADU - offset) * gain`, as GaussMLE does, reports
-photoelectrons (photons × `qe`).
+In the fit types ([`Emitter2DFit`](@ref), [`Emitter3DFit`](@ref)), fitted `photons` (the total
+in the frame) and `bg` (per pixel) are in the units the fitter works in: photons when the data
+are in photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref) with `qe = 1`), and
+photoelectrons (photons × `qe`) when the fitter converts `SCMOSCamera` ADU with
+`(ADU - offset) * gain`, as GaussMLE does. A simulator that fills these types with ground truth,
+as SMLMSim does, stores `photons` before QE, as in `Emitter2D`.
 
 `pixel_size` is the size of a pixel at the sample: the sensor pixel divided by the
 magnification. A 6.5 µm sensor pixel behind a 100× objective is 0.065 µm.
@@ -44,8 +45,9 @@ Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
   the columns; y increases downward, along the rows.
 - Columns and rows are numbered from 1, so pixel `(1, 1)` is the top-left pixel.
 - A camera stores its pixel edges, `pixel_edges_x` and `pixel_edges_y`: `N + 1` edges per axis
-  for `N` pixels, increasing from 0. Constructors do not check this; `physical_to_pixel*`, the
-  uniform-pixel formulas and `IdealCamera`'s display assume it.
+  for `N` pixels, increasing from 0. Constructors do not check this; `physical_to_pixel*` and the
+  uniform-pixel formulas assume it, and the cameras' displays assume uniform pixels (they report
+  the first pixel's width).
 - With uniform pixels of `Δx` × `Δy`, pixel `(col, row)` covers
   `[(col - 1)·Δx, col·Δx) × [(row - 1)·Δy, row·Δy)` µm and its center is at
   `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm. In pixel coordinates the center of pixel `(col, row)`

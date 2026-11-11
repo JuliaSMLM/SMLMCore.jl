@@ -64,7 +64,7 @@ frame, dataset and track it belongs to.
 
 # Fields
 - `x::T`, `y::T`: fitted position (µm)
-- `photons::T`: fitted signal, in the units of the data the fitter received (below)
+- `photons::T`: fitted signal, the total in the frame, in the fitter's working units (below)
 - `bg::T`: fitted background per pixel, in the same units
 - `σ_x::T`, `σ_y::T`: standard deviations of the position (µm)
 - `σ_xy::T`: covariance of x and y (µm²); 0 when the uncertainty ellipse is axis-aligned
@@ -75,10 +75,12 @@ frame, dataset and track it belongs to.
 - `track_id::Int`: track the localization is linked into (0 = unlinked)
 - `id::Int`: identifier within the dataset (0 = not set)
 
-`photons` and `bg` are the fitted signal and background in the units of the data the fitter
-received: photons for data in photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref)
-with `qe = 1`). A fitter that converts `SCMOSCamera` data with `(ADU - offset) * gain`, as
-GaussMLE does, reports photoelectrons (photons × `qe`).
+`photons` (the total in the frame) and `bg` (per pixel) are in the units the fitter works in:
+photons when the data are in photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref)
+with `qe = 1`), and photoelectrons (photons × `qe`) when the fitter converts `SCMOSCamera` ADU
+with `(ADU - offset) * gain`, as GaussMLE does. A simulator that fills these types with ground
+truth, as SMLMSim does, stores `photons` before QE: the photons that reach the camera in the
+frame, as in `Emitter2D`.
 
 The position covariance is
 ``\\Sigma = \\begin{pmatrix} \\sigma_x^2 & \\sigma_{xy} \\\\ \\sigma_{xy} & \\sigma_y^2 \\end{pmatrix}``:
@@ -123,7 +125,7 @@ frame, dataset and track it belongs to.
 
 # Fields
 - `x::T`, `y::T`, `z::T`: fitted position (µm)
-- `photons::T`: fitted signal, in the units of the data the fitter received (below)
+- `photons::T`: fitted signal, the total in the frame, in the fitter's working units (below)
 - `bg::T`: fitted background per pixel, in the same units
 - `σ_x::T`, `σ_y::T`, `σ_z::T`: standard deviations of the position (µm)
 - `σ_xy::T`, `σ_xz::T`, `σ_yz::T`: covariances of the position (µm²); 0 = uncorrelated
@@ -134,10 +136,12 @@ frame, dataset and track it belongs to.
 - `track_id::Int`: track the localization is linked into (0 = unlinked)
 - `id::Int`: identifier within the dataset (0 = not set)
 
-`photons` and `bg` are the fitted signal and background in the units of the data the fitter
-received: photons for data in photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref)
-with `qe = 1`). A fitter that converts `SCMOSCamera` data with `(ADU - offset) * gain`, as
-GaussMLE does, reports photoelectrons (photons × `qe`).
+`photons` (the total in the frame) and `bg` (per pixel) are in the units the fitter works in:
+photons when the data are in photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref)
+with `qe = 1`), and photoelectrons (photons × `qe`) when the fitter converts `SCMOSCamera` ADU
+with `(ADU - offset) * gain`, as GaussMLE does. A simulator that fills these types with ground
+truth, as SMLMSim does, stores `photons` before QE: the photons that reach the camera in the
+frame, as in `Emitter2D`.
 
 The position covariance is
 ``\\Sigma = \\begin{pmatrix} \\sigma_x^2 & \\sigma_{xy} & \\sigma_{xz} \\\\ \\sigma_{xy} & \\sigma_y^2 & \\sigma_{yz} \\\\ \\sigma_{xz} & \\sigma_{yz} & \\sigma_z^2 \\end{pmatrix}``:

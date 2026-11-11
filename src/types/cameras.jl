@@ -6,7 +6,8 @@ Supertype of all camera types. A camera gives the pixel geometry of the full ima
 A concrete camera type has the fields `pixel_edges_x` and `pixel_edges_y`: the pixel edges in µm,
 increasing, `N + 1` of them for `N` pixels, starting at the camera's top-left corner, `(0, 0)`.
 Pixels need not be uniform. Constructors do not check that the edges increase from 0;
-`physical_to_pixel*`, the uniform-pixel formulas and `IdealCamera`'s display assume it.
+`physical_to_pixel*` and the uniform-pixel formulas assume it, and the cameras' displays assume
+uniform pixels (they report the first pixel's width).
 [Pixels and coordinates](@ref) gives the convention.
 """
 abstract type AbstractCamera end

@@ -33,10 +33,11 @@ those versions define the same types: Pkg reports unsatisfiable requirements for
 
 - Lengths are in µm. In an `Emitter2D` or `Emitter3D`, `photons` are the photons from the
   emitter that reach the camera in the frame, before QE.
-- In the fit types, `photons` and `bg` are the fitted signal and background in the units of the
-  data the fitter received: photons for data in photons (an `IdealCamera`, or an `SCMOSCamera`
-  with `qe = 1`). A fitter that converts `SCMOSCamera` data with `(ADU - offset) * gain`, as
-  GaussMLE does, reports photoelectrons (photons × `qe`).
+- In the fit types, fitted `photons` (the total in the frame) and `bg` (per pixel) are in the
+  units the fitter works in: photons when the data are in photons (an `IdealCamera`, or an
+  `SCMOSCamera` with `qe = 1`), and photoelectrons (photons × `qe`) when the fitter converts
+  `SCMOSCamera` ADU with `(ADU - offset) * gain`, as GaussMLE does. A simulator that fills these
+  types with ground truth, as SMLMSim does, stores `photons` before QE.
 - `pixel_size` is the size of a pixel at the sample (the sensor pixel divided by the
   magnification), in µm.
 - The origin, `(0, 0)` µm, is the camera's top-left corner. x runs along the columns and y down
@@ -107,7 +108,7 @@ end
 mutable struct Emitter2DFit{T} <: AbstractEmitter
     x::T             # µm
     y::T             # µm
-    photons::T       # fitted signal, in the units of the data the fitter received
+    photons::T       # fitted total in the frame: photons, or photoelectrons for sCMOS data
     bg::T            # fitted background per pixel, in the same units
     σ_x::T           # standard deviation of x, µm
     σ_y::T           # standard deviation of y, µm
@@ -124,7 +125,7 @@ mutable struct Emitter3DFit{T} <: AbstractEmitter
     x::T             # µm
     y::T             # µm
     z::T             # µm
-    photons::T       # fitted signal, in the units of the data the fitter received
+    photons::T       # fitted total in the frame: photons, or photoelectrons for sCMOS data
     bg::T            # fitted background per pixel, in the same units
     σ_x::T           # standard deviation of x, µm
     σ_y::T           # standard deviation of y, µm

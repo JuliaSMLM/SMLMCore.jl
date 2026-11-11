@@ -7,9 +7,10 @@ coordinates and positions, selects emitters by property, region or frame, and co
 !!! info "Units"
     Lengths (positions, pixel sizes and edges, position uncertainties) are in µm. In an
     `Emitter2D` or `Emitter3D`, `photons` counts photons, before QE; fitted `photons` and `bg` are
-    in the units of the data the fitter received. sCMOS calibration uses the units of a camera's
-    specification sheet: offset in ADU, gain in e⁻/ADU, read noise in e⁻ rms. Frames, datasets
-    and pixels are numbered from 1. [Conventions](guide/conventions.md) has the details.
+    in photons, or in photoelectrons (photons × `qe`) when a fitter converts sCMOS ADU. sCMOS
+    calibration uses the units of a camera's specification sheet: offset in ADU, gain in e⁻/ADU,
+    read noise in e⁻ rms. Frames, datasets and pixels are numbered from 1.
+    [Conventions](guide/conventions.md) has the details.
 
 ## Where it fits
 
