@@ -348,8 +348,8 @@ end
         @test cam_flash.readnoise === 1.6
         @test cam_flash.gain === 0.46
 
-        # ORCA-Quest (ultra low noise)
-        cam_quest = SCMOSCamera(2304, 4096, 0.0044, 0.27, gain=0.5, qe=0.85)
+        # Low-noise camera, 4096 × 2304 pixels, 0.077 µm at the sample
+        cam_quest = SCMOSCamera(4096, 2304, 0.077, 0.27, gain=0.5, qe=0.85)
         @test cam_quest.readnoise === 0.27
         @test cam_quest.qe === 0.85
 
