@@ -9,6 +9,22 @@ _hasdoc(m, s) = (b = Base.Docs.Binding(m, s); haskey(Base.Docs.meta(b.mod), b))
     @test undocumented == Symbol[]
 end
 
+@testset "README's quick start is Home's, and it runs" begin
+    # The style guide asks for the same quick start on both pages; the docs build runs Home's.
+    root = dirname(@__DIR__)
+    quickstart(file, fence) = (m = match(
+        Regex("## Quick start\\n\\n" * fence * "\\n(.*?)\\n```", "s"),
+        read(joinpath(root, file), String)); m === nothing ? nothing : m[1])
+    readme = quickstart("README.md", "```julia")
+    home = quickstart(joinpath("docs", "src", "index.md"), "```@example quickstart")
+    @test readme isa AbstractString
+    @test readme == home
+    m = Module()
+    Base.include_string(m, readme)
+    @test length(m.bright) == 1 && m.bright.emitters[1].photons == 1200.0
+    @test length(m.region) == 1 && m.region.emitters[1].x == 1.0
+end
+
 @testset "api_overview.md is a precompile dependency" begin
     # api.jl reads api_overview.md at precompile time; unless the file is listed among the
     # cache's dependencies, editing it leaves `SMLMCore.api_overview()` stale.
