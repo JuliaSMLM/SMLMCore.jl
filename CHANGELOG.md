@@ -5,10 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-11-11
 
 ### Changed
-- Split SMLMCore from SMLMData.jl 0.7.1 with its git history. Core types and operations stay here; file io (SMITE) moves to SMLMio. SMLMData 0.7.2 and later loads SMLMCore and SMLMio and re-exports both. Apart from the fixes below, behavior is that of SMLMData 0.7.1.
+- Split SMLMCore from SMLMData.jl 0.7.1 with its git history. Core types and operations stay here; file io (SMITE) moves to SMLMio. SMLMData 0.7.2 and later load SMLMCore and SMLMio and re-export both. Apart from the fixes below, behavior is that of SMLMData 0.7.1.
 - Requires Julia 1.10 or later, the current long-term-support release (SMLMData 0.7.1 allowed Julia 1.9).
 - SMLMCore cannot be installed together with SMLMData 0.7.1 or earlier.
 - Requires StaticArrays 1.9.8 or later; earlier versions do not load on Julia 1.10 beside the current StaticArraysCore.
@@ -59,5 +59,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 See git history for earlier changes.
 
-[Unreleased]: https://github.com/JuliaSMLM/SMLMCore.jl/commits/main
+[0.1.0]: https://github.com/JuliaSMLM/SMLMCore.jl/releases/tag/v0.1.0
 [0.4.0]: https://github.com/JuliaSMLM/SMLMData.jl/releases/tag/v0.4.0
