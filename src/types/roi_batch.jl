@@ -17,7 +17,7 @@ cut.
   1-based
 - `frame_idx::Int32`: frame number, 1-based
 
-ROI pixel `data[i, j]` is camera pixel (column `corner[1] + j - 1`, row `corner[2] + i - 1`);
+ROI pixel `data[row, col]` is camera pixel `(x, y) = (corner[1] + col - 1, corner[2] + row - 1)`;
 see [ROIs](@ref).
 
 # Constructors
@@ -64,9 +64,10 @@ ROIs to fitters (SMLMBoxer to GaussMLE, for example).
 `T` is the element type of `data`, `N` is 3, `A` is the array type (`Array`, or a GPU array) and
 `C` the camera type.
 
-ROI pixel `data[i, j, k]` is camera pixel (column `x_corners[k] + j - 1`, row
-`y_corners[k] + i - 1`). For uniform pixels of size `Δx` × `Δy` (µm) its center is at
-`((x_corners[k] + j - 1.5)·Δx, (y_corners[k] + i - 1.5)·Δy)` µm; see [ROIs](@ref).
+ROI pixel `data[row, col, k]` is camera pixel
+`(x, y) = (x_corners[k] + col - 1, y_corners[k] + row - 1)`. For uniform pixels of size
+`Δx` × `Δy` (µm) its center is at `((x_corners[k] + col - 1.5)·Δx, (y_corners[k] + row - 1.5)·Δy)`
+µm; see [ROIs](@ref).
 
 # Constructors
 - `ROIBatch(data, x_corners, y_corners, frame_indices, camera)`: the corner and frame vectors
@@ -80,10 +81,12 @@ ROI pixel `data[i, j, k]` is camera pixel (column `x_corners[k] + j - 1`, row
   and iterating a batch gives its ROIs in order.
 - `Adapt.adapt(CuArray, batch)` (after `using Adapt, CUDA`; both must be added to the
   environment, `Pkg.add(["Adapt", "CUDA"])`) moves `data` to the GPU. The corners, frame indices
-  and camera stay on the host.
+  and camera stay on the host. Indexing and iteration need `data` on the host; use
+  `Adapt.adapt(Array, batch_gpu)` first.
   ```julia
   using Adapt, CUDA
   batch_gpu = Adapt.adapt(CuArray, batch)
+  batch_host = Adapt.adapt(Array, batch_gpu)   # before batch_host[k] or iterating
   ```
 
 # Example

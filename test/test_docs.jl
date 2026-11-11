@@ -25,6 +25,23 @@ end
     @test length(m.region) == 1 && m.region.emitters[1].x == 1.0
 end
 
+@testset "Home and api_overview.md give the same install and ecosystem text" begin
+    # Home holds the full "Where it fits" and "Installation" text, api_overview.md a copy of
+    # each, and the README a short form of the install limit.
+    root = dirname(@__DIR__)
+    section(text, name) = (m = match(Regex("## " * name * "\\n\\n(.*?)\\n(?=## )", "s"), text);
+        m === nothing ? nothing : m[1])
+    home = read(joinpath(root, "docs", "src", "index.md"), String)
+    overview = read(joinpath(root, "api_overview.md"), String)
+    for name in ("Where it fits", "Installation")
+        @test section(home, name) isa AbstractString
+        @test section(home, name) == section(overview, name)
+    end
+    @test occursin("SMLMData 0.7.1 or earlier", section(home, "Installation"))
+    readme = read(joinpath(root, "README.md"), String)
+    @test occursin("SMLMData 0.7.1 or earlier", section(readme, "Installation"))
+end
+
 const OVERVIEW = read(joinpath(dirname(@__DIR__), "api_overview.md"), String)
 const JULIA_BLOCK = r"```julia\n(.*?)\n```"s
 # The one hand-written listing of the types: the first julia block after its heading

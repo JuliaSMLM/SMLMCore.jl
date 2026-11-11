@@ -55,10 +55,13 @@ end
 """
     physical_to_pixel_index(x, y, pixel_size) -> (px, py)
 
-Return the 1-based (column, row) index of the pixel whose half-open interval
-`[(i-1)·pixel_size, i·pixel_size)` contains the position, for square pixels of `pixel_size` µm
-with the camera's edges starting at 0. A position outside the camera gives an index outside
-`1:N`; the function does not check bounds.
+Return the 1-based (column, row) index of the pixel that contains the position, for square
+pixels of `pixel_size` µm with the camera's edges starting at 0.
+
+Along each axis, pixel `n` covers the half-open interval `[(n - 1)·pixel_size, n·pixel_size)`,
+up to floating-point rounding: a position computed as `(n - 1) * pixel_size` can fall in pixel
+`n - 1`. A position outside the camera gives an index outside `1:N`; the function does not check
+bounds.
 
 # Example
 ```jldoctest
@@ -66,6 +69,9 @@ julia> physical_to_pixel_index(0.0, 0.0, 0.1)   # the camera's corner is in pixe
 (1, 1)
 
 julia> physical_to_pixel_index(0.25, 0.05, 0.125)   # 0.25 µm is the left edge of pixel 3
+(3, 1)
+
+julia> physical_to_pixel_index(0.3, 0.05, 0.1)   # 0.3 / 0.1 rounds to just below 3
 (3, 1)
 ```
 """

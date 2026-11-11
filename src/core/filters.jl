@@ -8,8 +8,9 @@ Every name in `condition` is read as an emitter property, except the operators `
 `>=`, `==`, `!=`, `in` and `∈`, and `&&` and `||`. A condition therefore holds only property
 names, number literals and tuples; comparisons may be chained (`1.0 <= x <= 5.0`). It cannot use
 a variable (`photons > threshold` reads `e.threshold`), a function (`abs(x)`), arithmetic
-(`x + y`), `!`, a range (`frame in 1:10`) or the operators `≤` and `≥`; each throws a
-FieldError. For those, filter the emitters directly:
+(`x + y`), `!`, a range (`frame in 1:10`) or the operators `≤` and `≥`; each throws an error
+that names the missing field (a `FieldError` from Julia 1.12, an `ErrorException` before). For
+those, filter the emitters directly:
 
     BasicSMLD(filter(e -> e.photons > threshold, smld.emitters), smld.camera,
               smld.n_frames, smld.n_datasets, copy(smld.metadata))
@@ -81,8 +82,9 @@ Return a new SMLD with the emitters of one frame, or of a set of frames given as
 vector.
 
 Needs emitters with a `frame` field (`Emitter2DFit`, `Emitter3DFit`). `Emitter2D` and
-`Emitter3D` have none and throw a FieldError. The result's emitters are the input's own objects,
-as for [`@filter`](@ref).
+`Emitter3D` have none and throw an error that names the missing field (a `FieldError` from Julia
+1.12, an `ErrorException` before). The result's emitters are the input's own objects, as for
+[`@filter`](@ref).
 
 # Example
 ```jldoctest

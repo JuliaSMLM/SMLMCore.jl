@@ -10,38 +10,47 @@ https://JuliaSMLM.github.io/SMLMCore.jl/stable/.
 
 ## Where it fits
 
-SMLMCore holds the types that the JuliaSMLM packages share. Analysis packages such as GaussMLE,
-SMLMBoxer and SMLMAnalysis depend on SMLMData, which from 0.7.2 loads SMLMCore and re-exports its
-names, so their users get SMLMCore's types without loading it. GaussMLE re-exports `ROIBatch`,
+SMLMCore holds the types that the JuliaSMLM packages share. SMLMData 0.7.2 and later load
+SMLMCore and re-export its names, so packages that depend on those versions of SMLMData, and
+their users, get SMLMCore's types without loading it. GaussMLE re-exports `ROIBatch`,
 `SingleROI`, `IdealCamera`, `SCMOSCamera` and `@filter`, SMLMBoxer re-exports `ROIBatch` and
 `SingleROI`, and SMLMAnalysis re-exports `IdealCamera` and `SCMOSCamera`. A package that needs
 only the types depends on SMLMCore directly. File reading and writing (SMITE `.mat`) is in
 [SMLMio](https://github.com/JuliaSMLM/SMLMio.jl).
 
+## Installation
+
 ```julia
-using GaussMLE       # Re-exports ROIBatch, SingleROI, IdealCamera, SCMOSCamera and @filter
-using SMLMAnalysis   # Re-exports IdealCamera and SCMOSCamera
+using Pkg
+Pkg.add("SMLMCore")
 ```
 
-SMLMCore cannot share an environment with SMLMData 0.7.1 or earlier, which defines the same
-types (its compat on SMLMData is `>= 0.7.2`).
+An environment that holds SMLMData 0.7.1 or earlier, directly or through a package that depends
+on it (GaussMLE, SMLMSim, SMLMBoxer, SMLMAnalysis and others), cannot add SMLMCore, because
+those versions define the same types: Pkg reports unsatisfiable requirements for SMLMData.
 
 ## Conventions
 
-- Lengths are in µm, intensities in photons, and backgrounds in photons per pixel. `photons` is
-  the number of photons from the emitter that reach the camera in the frame, before QE.
+- Lengths are in µm. In an `Emitter2D` or `Emitter3D`, `photons` are the photons from the
+  emitter that reach the camera in the frame, before QE.
+- In the fit types, `photons` and `bg` are the fitted signal and background in the units of the
+  data the fitter received: photons for data in photons (an `IdealCamera`, or an `SCMOSCamera`
+  with `qe = 1`). A fitter that converts `SCMOSCamera` data with `(ADU - offset) * gain`, as
+  GaussMLE does, reports photoelectrons (photons × `qe`).
 - `pixel_size` is the size of a pixel at the sample (the sensor pixel divided by the
   magnification), in µm.
 - The origin, `(0, 0)` µm, is the camera's top-left corner. x runs along the columns and y down
   the rows.
-- Pixel `(i, j)` is column `i` and row `j`, numbered from 1; with uniform pixels its center is
-  at `((i - 0.5)·Δx, (j - 0.5)·Δy)` µm. In pixel coordinates the top-left pixel's center is
-  `(1, 1)` and the camera's corner is `(0.5, 0.5)`.
+- Pixels are labeled `(x, y) = (col, row)`, numbered from 1; arrays are indexed `[row, col]`.
+  With uniform pixels, pixel `(col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm.
+  In pixel coordinates the top-left pixel's center is `(1, 1)` and the camera's corner is
+  `(0.5, 0.5)`.
 - Images and per-pixel arrays are indexed `[row, col] = [y, x]`. An sCMOS calibration map has
-  size `(ny, nx)`; ROI data are `[y, x]` (`SingleROI`) or `[y, x, roi]` (`ROIBatch`). A square
-  sensor's map cannot be checked for orientation, so a transposed map is accepted silently.
-- An ROI's corner is the camera pixel `(column, row)` of its top-left pixel. ROI pixel
-  `data[i, j, k]` is camera pixel (column `x_corners[k] + j - 1`, row `y_corners[k] + i - 1`).
+  size `(ny, nx)`; ROI data are `[row, col]` (`SingleROI`) or `[row, col, roi]` (`ROIBatch`). A
+  square sensor's map cannot be checked for orientation, so a transposed map is accepted
+  silently.
+- An ROI's corner is the camera pixel `(x, y) = (col, row)` of its top-left pixel. ROI pixel
+  `data[row, col, k]` is camera pixel `(x_corners[k] + col - 1, y_corners[k] + row - 1)`.
   ROI data are in the camera's raw units (ADU for an `SCMOSCamera`).
 - Frame and dataset numbers start at 1.
 - `σ_x`, `σ_y` and `σ_z` are standard deviations (µm); `σ_xy`, `σ_xz` and `σ_yz` are
@@ -98,13 +107,13 @@ end
 mutable struct Emitter2DFit{T} <: AbstractEmitter
     x::T             # µm
     y::T             # µm
-    photons::T       # photons
-    bg::T            # photons/pixel
+    photons::T       # fitted signal, in the units of the data the fitter received
+    bg::T            # fitted background per pixel, in the same units
     σ_x::T           # standard deviation of x, µm
     σ_y::T           # standard deviation of y, µm
     σ_xy::T          # covariance of x and y, µm² (0 = axis-aligned)
-    σ_photons::T     # standard deviation of photons, photons
-    σ_bg::T          # standard deviation of bg, photons/pixel
+    σ_photons::T     # standard deviation of photons
+    σ_bg::T          # standard deviation of bg
     frame::Int       # 1-based
     dataset::Int     # 1-based
     track_id::Int    # 0 = unlinked
@@ -115,16 +124,16 @@ mutable struct Emitter3DFit{T} <: AbstractEmitter
     x::T             # µm
     y::T             # µm
     z::T             # µm
-    photons::T       # photons
-    bg::T            # photons/pixel
+    photons::T       # fitted signal, in the units of the data the fitter received
+    bg::T            # fitted background per pixel, in the same units
     σ_x::T           # standard deviation of x, µm
     σ_y::T           # standard deviation of y, µm
     σ_z::T           # standard deviation of z, µm
     σ_xy::T          # covariance of x and y, µm²
     σ_xz::T          # covariance of x and z, µm²
     σ_yz::T          # covariance of y and z, µm²
-    σ_photons::T     # standard deviation of photons, photons
-    σ_bg::T          # standard deviation of bg, photons/pixel
+    σ_photons::T     # standard deviation of photons
+    σ_bg::T          # standard deviation of bg
     frame::Int       # 1-based
     dataset::Int     # 1-based
     track_id::Int    # 0 = unlinked
@@ -211,9 +220,10 @@ cam_maps = SCMOSCamera(512, 512, 0.1, readnoise_map; offset = 100.0, gain = 0.5,
 - `IdealCamera(1:512, 1:512, 0.1)` gives the same camera as `IdealCamera(512, 512, 0.1)`: only
   the ranges' lengths are used, and the edges always start at 0.
 - In an `SCMOSCamera` call, `pixel_size`, `readnoise`, `offset`, `gain` and `qe` share one
-  number type, the type of `pixel_size`. Mixing `Float32` and `Float64` (or integers and floats)
-  in one constructor call raises a MethodError (a TypeError for a keyword); convert the values
-  first, and write `offset = 100.0`, not `100`.
+  number type, the type of `pixel_size`. A call that mixes number types fails: with an
+  `UndefVarError` (`T` not defined) when scalars of different types are passed positionally, a
+  `MethodError` for a map of another element type, and a `TypeError` for a keyword. Convert the
+  values first, and write `offset = 100.0`, not `100`.
 - `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset, gain, qe)` builds a camera from
   its pixel edges (µm), which need not be uniform.
 
@@ -240,11 +250,13 @@ The corner and frame vectors may hold any integer type; they are converted to `I
 must be square (else an `ArgumentError`), and each vector needs one entry per ROI (else a
 `DimensionMismatch`).
 
-On a GPU, only `data` moves; the corners, frame indices and camera stay on the host:
+On a GPU, only `data` moves; the corners, frame indices and camera stay on the host. Indexing
+and iteration need `data` on the host; use `Adapt.adapt(Array, batch_gpu)` first:
 
 ```julia
 using Adapt, CUDA          # both must be added to the environment: Pkg.add(["Adapt", "CUDA"])
 batch_gpu = Adapt.adapt(CuArray, batch)
+batch_host = Adapt.adapt(Array, batch_gpu)   # before batch_host[k] or iterating
 ```
 
 Typical workflow:
@@ -293,8 +305,9 @@ edges_x, edges_y = compute_bin_edges(1:512, 1:512, 0.1)    # pixel edges, µm, f
 
 - `pixel_to_physical`, `physical_to_pixel` and `physical_to_pixel_index` take one scalar pixel
   size: square pixels with the edges at 0. `get_pixel_centers` works for any camera.
-- `physical_to_pixel_index` returns the pixel whose half-open interval
-  `[(i-1)·pixel_size, i·pixel_size)` holds the position, and does not check bounds.
+- `physical_to_pixel_index` returns the pixel that holds the position: along each axis, pixel
+  `n` covers `[(n - 1)·pixel_size, n·pixel_size)`, up to floating-point rounding (a position
+  computed as `(n - 1) * pixel_size` can fall in pixel `n - 1`). It does not check bounds.
 - `pixel_to_physical` returns `pixel_size`'s type, so `pixel_size` must be a float.
 
 ### Filtering Operations
@@ -321,11 +334,12 @@ bright2 = BasicSMLD(filter(e -> e.photons > threshold, smld.emitters), smld.came
   operators `<`, `>`, `<=`, `>=`, `==`, `!=`, `in` and `∈`, and `&&` and `||`. A condition
   therefore holds only property names, number literals and tuples. It cannot use a variable
   (`photons > threshold` reads `e.threshold`), a function (`abs(x)`), arithmetic (`x + y`), `!`,
-  a range (`frame in 1:10`) or `≤` and `≥`; each throws a FieldError.
+  a range (`frame in 1:10`) or `≤` and `≥`; each throws an error that names the missing field
+  (a `FieldError` from Julia 1.12, an `ErrorException` before).
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
-  `σ_xy`, `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
+  `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
-  `Emitter3D` throw a FieldError.
+  `Emitter3D` throw an error that names the missing field.
 - `filter_roi` bounds are inclusive. A range's smallest and largest elements are the bounds, so
   `0.0:0.3:1.0` stops at 0.9; prefer tuples. The 2D form needs 2D emitters and the 3D form 3D
   emitters.
@@ -442,13 +456,14 @@ end
   size at the sample.
 - **Pixel indices, frame numbers and dataset numbers start at 1.**
 - The origin `(0, 0)` is the **top-left corner** of the camera; x is the column and y the row.
-- Per-pixel maps and ROI data are indexed `[y, x]`. A transposed map on a square sensor raises
-  no error.
+- Per-pixel maps and ROI data are indexed `[row, col] = [y, x]`. A transposed map on a square
+  sensor raises no error.
 
 ### Types
 - The emitter keyword constructors need their positional values already of type `T`.
-- `SCMOSCamera` arguments share one number type; mixing `Float32` and `Float64`, or integers and
-  floats, raises a MethodError (a TypeError for a keyword).
+- `SCMOSCamera` arguments share one number type. A call that mixes number types fails: with an
+  `UndefVarError` (`T` not defined) when scalars of different types are passed positionally, a
+  `MethodError` for a map of another element type, and a `TypeError` for a keyword.
 - `BasicSMLD` infers `T` from the camera's pixel edges, and its metadata must be a
   `Dict{String,Any}`.
 

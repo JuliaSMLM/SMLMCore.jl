@@ -5,7 +5,9 @@ Supertype of all camera types. A camera gives the pixel geometry of the full ima
 
 A concrete camera type has the fields `pixel_edges_x` and `pixel_edges_y`: the pixel edges in µm,
 increasing, `N + 1` of them for `N` pixels, starting at the camera's top-left corner, `(0, 0)`.
-Pixels need not be uniform. [Pixels and coordinates](@ref) gives the convention.
+Pixels need not be uniform. Constructors do not check that the edges increase from 0;
+`physical_to_pixel*`, the uniform-pixel formulas and `IdealCamera`'s display assume it.
+[Pixels and coordinates](@ref) gives the convention.
 """
 abstract type AbstractCamera end
 
@@ -63,8 +65,8 @@ A camera with a regular pixel grid and Poisson noise only, defined by its pixel 
 - `pixel_edges_x::Vector{T}`: pixel edges in x (µm), from 0, one more than the number of pixels
 - `pixel_edges_y::Vector{T}`: pixel edges in y (µm), from 0, one more than the number of pixels
 
-Pixel `(i, j)` (column `i`, row `j`) is centered at `((i - 0.5)·Δx, (j - 0.5)·Δy)` µm, where
-`Δx` and `Δy` are the pixel sizes; see [Pixels and coordinates](@ref).
+Pixel `(x, y) = (col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm, where `Δx` and
+`Δy` are the pixel sizes; see [Pixels and coordinates](@ref).
 
 # Constructors
 - `IdealCamera(nx, ny, pixel_size)`: `nx` × `ny` pixels of `pixel_size` µm at the sample.
@@ -189,9 +191,9 @@ the signal chain these parameters describe.
 
 `pixel_size` (or the edges), `readnoise`, `offset`, `gain` and `qe` share one number type `T`,
 the type of `pixel_size`: write `offset = 100.0`, not `100`, and pass maps as `Matrix{T}`. A call
-that mixes types has no matching method (for an integer `readnoise`, Julia reports
-`UndefVarError: T not defined in static parameter matching`). A map of the wrong size throws a
-`DimensionMismatch`.
+that mixes number types fails: with an `UndefVarError` (`T` not defined) when scalars of
+different types are passed positionally, a `MethodError` for a map of another element type, and
+a `TypeError` for a keyword. A map of the wrong size throws a `DimensionMismatch`.
 
 # Example
 A 2048 × 2048 sensor of 6.5 µm pixels behind a 100× objective has pixels of 0.065 µm at the

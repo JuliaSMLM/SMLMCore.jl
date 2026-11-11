@@ -1,5 +1,14 @@
 using SMLMCore, Test
 
+# An SMLD type of a caller's own, shown by the generic AbstractSMLD methods
+struct OwnTestSMLD{E<:SMLMCore.AbstractEmitter} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Int
+    n_datasets::Int
+    metadata::Dict{String,Any}
+end
+
 @testset "Basic SMLD" begin
     @testset "Construction" begin
         # Create test data
@@ -181,4 +190,19 @@ end
         count += 1
     end
     @test count == 0
+end
+
+@testset "Detailed show of a BasicSMLD and of another SMLD type" begin
+    cam = IdealCamera(1:64, 1:32, 0.1)
+    emitters = [Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0),
+                Emitter2DFit{Float64}(1.5, 2.5, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0)]
+    basic = sprint(show, MIME("text/plain"), BasicSMLD(emitters, cam, 3, 1))
+    @test startswith(basic, "BasicSMLD{Float64,")
+    @test occursin("Mean photons: 1100.0", basic)
+    own = sprint(show, MIME("text/plain"), OwnTestSMLD(emitters, cam, 3, 1, Dict{String,Any}()))
+    @test startswith(own, "OwnTestSMLD:")
+    @test occursin("Emitters: 2 2D localizations", own)
+    @test occursin("Camera: 64×32 pixels", own)
+    @test occursin("Frames: 3", own)
+    @test occursin("Mean photons: 1100.0", own)
 end

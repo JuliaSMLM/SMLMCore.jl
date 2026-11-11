@@ -160,11 +160,6 @@ end
 # --- Generic AbstractSMLD detailed show method for subtypes without specific methods ---
 
 function Base.show(io::IO, ::MIME"text/plain", smld::S) where {S<:AbstractSMLD}
-    # Skip if a more specific method exists (to avoid method ambiguities)
-    if S <: BasicSMLD
-        return
-    end
-    
     n_emitters = length(smld.emitters)
     
     # Camera info if available

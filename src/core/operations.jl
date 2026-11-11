@@ -9,12 +9,8 @@ Concatenate SMLDs into one, keeping every emitter's frame and dataset numbers.
 
 # Notes
 - The cameras must be the same: the same type and equal values in every field, calibration
-  included (a scalar calibration and a uniform map of the same value differ). Numbers, arrays,
-  dictionaries, tuples, immutable structs and cameras held in a field compare by value (NaN
-  equals NaN); any other object in a camera field compares with its own `==`, which for a
-  mutable struct without a `==` method means the same object. A plain-bits field that a camera's
-  constructor leaves unset holds whatever was in memory, so it can make two otherwise equal
-  cameras differ. Otherwise an `ErrorException` names the input and the fields that differ.
+  included (a scalar and a uniform map of the same value differ). Otherwise an `ErrorException`
+  names the input and the fields that differ.
 - All inputs must hold the same emitter type.
 - `n_frames` and `n_datasets` are the largest of the inputs'.
 - Metadata is a copy of the first input's, plus `"concatenated_from" => number of inputs`. The
@@ -90,7 +86,8 @@ Merge SMLDs into one, optionally renumbering frames or datasets so that the inpu
 - `adjust_datasets=false`: place each input's datasets after the earlier inputs' datasets. Needs
   emitters with a `dataset` property.
 
-`Emitter2D` and `Emitter3D` have neither property, and renumbering them throws a FieldError.
+`Emitter2D` and `Emitter3D` have neither property; renumbering them throws an error that names
+the missing field (a `FieldError` from Julia 1.12, an `ErrorException` before).
 
 # Returns
 - A new SMLD of the first input's type that holds every input's emitters, in order.

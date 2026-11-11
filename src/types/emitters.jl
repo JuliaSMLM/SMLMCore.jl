@@ -4,9 +4,9 @@
 Supertype of all emitter (localization) types. Positions are in µm.
 
 A custom emitter type subtypes `AbstractEmitter` and has the properties `x` and `y` (and `z`
-for 3D) in µm and `photons`. [`filter_frames`](@ref) needs a `frame` property, and renumbering
-in [`merge_smld`](@ref) needs `frame` and `dataset`. Declare the type's dimension as
-[`emitter_ndims`](@ref) describes.
+for 3D) in µm and `photons`. [`filter_frames`](@ref) needs a `frame` property. In
+[`merge_smld`](@ref), `adjust_frames` needs `frame` and `adjust_datasets` needs `dataset`.
+Declare the type's dimension as [`emitter_ndims`](@ref) describes.
 """
 abstract type AbstractEmitter end
 
@@ -64,17 +64,21 @@ frame, dataset and track it belongs to.
 
 # Fields
 - `x::T`, `y::T`: fitted position (µm)
-- `photons::T`: fitted number of photons from the emitter that reach the camera in the frame,
-  before QE
-- `bg::T`: fitted background (photons/pixel)
+- `photons::T`: fitted signal, in the units of the data the fitter received (below)
+- `bg::T`: fitted background per pixel, in the same units
 - `σ_x::T`, `σ_y::T`: standard deviations of the position (µm)
 - `σ_xy::T`: covariance of x and y (µm²); 0 when the uncertainty ellipse is axis-aligned
-- `σ_photons::T`: standard deviation of `photons` (photons)
-- `σ_bg::T`: standard deviation of `bg` (photons/pixel)
+- `σ_photons::T`: standard deviation of `photons`, in its units
+- `σ_bg::T`: standard deviation of `bg`, in its units
 - `frame::Int`: frame number, 1-based
 - `dataset::Int`: dataset number, 1-based
 - `track_id::Int`: track the localization is linked into (0 = unlinked)
 - `id::Int`: identifier within the dataset (0 = not set)
+
+`photons` and `bg` are the fitted signal and background in the units of the data the fitter
+received: photons for data in photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref)
+with `qe = 1`). A fitter that converts `SCMOSCamera` data with `(ADU - offset) * gain`, as
+GaussMLE does, reports photoelectrons (photons × `qe`).
 
 The position covariance is
 ``\\Sigma = \\begin{pmatrix} \\sigma_x^2 & \\sigma_{xy} \\\\ \\sigma_{xy} & \\sigma_y^2 \\end{pmatrix}``:
@@ -119,17 +123,21 @@ frame, dataset and track it belongs to.
 
 # Fields
 - `x::T`, `y::T`, `z::T`: fitted position (µm)
-- `photons::T`: fitted number of photons from the emitter that reach the camera in the frame,
-  before QE
-- `bg::T`: fitted background (photons/pixel)
+- `photons::T`: fitted signal, in the units of the data the fitter received (below)
+- `bg::T`: fitted background per pixel, in the same units
 - `σ_x::T`, `σ_y::T`, `σ_z::T`: standard deviations of the position (µm)
 - `σ_xy::T`, `σ_xz::T`, `σ_yz::T`: covariances of the position (µm²); 0 = uncorrelated
-- `σ_photons::T`: standard deviation of `photons` (photons)
-- `σ_bg::T`: standard deviation of `bg` (photons/pixel)
+- `σ_photons::T`: standard deviation of `photons`, in its units
+- `σ_bg::T`: standard deviation of `bg`, in its units
 - `frame::Int`: frame number, 1-based
 - `dataset::Int`: dataset number, 1-based
 - `track_id::Int`: track the localization is linked into (0 = unlinked)
 - `id::Int`: identifier within the dataset (0 = not set)
+
+`photons` and `bg` are the fitted signal and background in the units of the data the fitter
+received: photons for data in photons (an [`IdealCamera`](@ref), or an [`SCMOSCamera`](@ref)
+with `qe = 1`). A fitter that converts `SCMOSCamera` data with `(ADU - offset) * gain`, as
+GaussMLE does, reports photoelectrons (photons × `qe`).
 
 The position covariance is
 ``\\Sigma = \\begin{pmatrix} \\sigma_x^2 & \\sigma_{xy} & \\sigma_{xz} \\\\ \\sigma_{xy} & \\sigma_y^2 & \\sigma_{yz} \\\\ \\sigma_{xz} & \\sigma_{yz} & \\sigma_z^2 \\end{pmatrix}``:

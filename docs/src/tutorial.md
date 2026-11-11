@@ -20,9 +20,10 @@ y down the rows ([Conventions](guide/conventions.md)).
 
 ## Emitters and an SMLD
 
-Each localization is an [`Emitter2DFit`](@ref): position (µm), photons, background
-(photons/pixel), their standard deviations, and the frame and dataset it belongs to. These two
-acquisitions of the same field each have three frames; the second is shifted by 0.05 µm in x.
+Each localization is an [`Emitter2DFit`](@ref): position (µm), fitted signal and background
+per pixel (in the units of the data the fitter received; photons here), their standard
+deviations, and the frame and dataset it belongs to. These two acquisitions of the same field
+each have three frames; the second is shifted by 0.05 µm in x.
 
 ```@example tutorial
 #               x      y     photons σ (µm) frame

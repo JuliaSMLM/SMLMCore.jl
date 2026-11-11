@@ -10,14 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Split SMLMCore from SMLMData.jl 0.7.1 with its git history. Core types and operations stay here; file io (SMITE) moves to SMLMio. SMLMData 0.7.2 and later loads SMLMCore and SMLMio and re-exports both. Apart from the fixes below, behavior is that of SMLMData 0.7.1.
 - Requires Julia 1.10 or later, the current long-term-support release (SMLMData 0.7.1 allowed Julia 1.9).
-- SMLMCore cannot be installed together with SMLMData 0.7.0 or 0.7.1.
+- SMLMCore cannot be installed together with SMLMData 0.7.1 or earlier.
 
 ### Fixed
 - `merge_smld` with `adjust_frames` or `adjust_datasets` no longer changes its inputs' emitters; renumbered entries are new emitters, and immutable emitter types can be renumbered.
-- `merge_smld` with `adjust_datasets` moves each input's datasets by the earlier inputs' total `n_datasets`, so inputs that hold several datasets no longer share dataset numbers.
-- `cat_smld` and `merge_smld` accept two cameras only when every field is equal, calibration included; the error names the fields that differ.
+- `merge_smld` with `adjust_datasets` moves each input's datasets by the earlier inputs' total `n_datasets`, so inputs that hold several datasets no longer share dataset numbers, and the result's `n_datasets` is the inputs' total (it was the number of inputs).
+- `cat_smld` and `merge_smld` accept two cameras only when every field is equal, calibration included, so a scalar and a uniform map of the same value no longer combine; the error names the fields that differ.
 - `cat_smld` and `merge_smld` with one input return a new SMLD with the metadata keys that a call with several inputs adds; they returned the input itself.
-- `physical_to_pixel_index` returns the pixel whose half-open interval holds the position, so `x = 0` is in pixel 1 and a position on a pixel edge is in the pixel that starts there. It rounded half to even, which put the camera's corner in pixel 0.
+- `physical_to_pixel_index` returns the pixel whose half-open interval holds the position, so `x = 0` is in pixel 1 and a position on a pixel edge is in the pixel that starts there, up to floating-point rounding. It rounded half to even, which put the camera's corner in pixel 0.
 - `physical_to_pixel` keeps the input's float type; Float32 positions gave Float64.
 - `Adapt.adapt(CuArray, batch)` on an `ROIBatch` moves only `data` and keeps the corners, frame indices and camera on the host; it threw a MethodError.
 - `ROIBatch` construction throws an `ArgumentError` for ROIs that are not square and a `DimensionMismatch` for corner or frame vectors of the wrong length, instead of an `AssertionError` from checks that Julia may compile out.

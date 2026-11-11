@@ -2,7 +2,7 @@
 
 SMLMCore defines the data types of single molecule localization microscopy (SMLM) in Julia:
 emitters (localizations), cameras, ROI batches and SMLD containers, with coordinate conversions,
-filters, and functions that combine data sets. Lengths are in µm and intensities in photons.
+filters, and functions that combine data sets. Lengths are in µm.
 
 [![CI](https://github.com/JuliaSMLM/SMLMCore.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMCore.jl/actions/workflows/CI.yml)
 [![Docs: stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaSMLM.github.io/SMLMCore.jl/stable)
@@ -14,9 +14,9 @@ using Pkg
 Pkg.add("SMLMCore")
 ```
 
-SMLMCore cannot share an environment with SMLMData 0.7.1 or earlier, which defines the same
-types; its compat on SMLMData (a weak dependency) is `>= 0.7.2`. Until SMLMData 0.7.2 is
-released, use SMLMCore in an environment without SMLMData, GaussMLE, SMLMBoxer or SMLMAnalysis.
+An environment that holds SMLMData 0.7.1 or earlier, directly or through a package that depends
+on it, cannot add SMLMCore; see
+[Installation](https://JuliaSMLM.github.io/SMLMCore.jl/stable/#Installation).
 
 ## Quick start
 
@@ -37,13 +37,11 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds in µm: the
 
 ## Where it fits
 
-SMLMCore holds the types that the JuliaSMLM packages share. Analysis packages such as GaussMLE,
-SMLMBoxer and SMLMAnalysis depend on SMLMData, which from 0.7.2 loads SMLMCore and re-exports its
-names, so their users get SMLMCore's types without loading it. GaussMLE re-exports `ROIBatch`,
-`SingleROI`, `IdealCamera`, `SCMOSCamera` and `@filter`, SMLMBoxer re-exports `ROIBatch` and
-`SingleROI`, and SMLMAnalysis re-exports `IdealCamera` and `SCMOSCamera`. A package that needs
-only the types depends on SMLMCore directly. File reading and writing (SMITE `.mat`) is in
-[SMLMio](https://github.com/JuliaSMLM/SMLMio.jl).
+SMLMCore holds the types that the JuliaSMLM packages share; SMLMData 0.7.2 and later load it and
+re-export its names. File reading and writing (SMITE `.mat`) is in
+[SMLMio](https://github.com/JuliaSMLM/SMLMio.jl). The documentation's
+[Where it fits](https://JuliaSMLM.github.io/SMLMCore.jl/stable/#Where-it-fits) says which
+packages re-export which names.
 
 ## Documentation
 

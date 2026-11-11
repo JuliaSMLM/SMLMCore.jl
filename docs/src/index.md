@@ -5,16 +5,17 @@ emitters (localizations), cameras, ROI batches and SMLD containers. It converts 
 coordinates and positions, selects emitters by property, region or frame, and combines data sets.
 
 !!! info "Units"
-    Lengths (positions, pixel sizes and edges, position uncertainties) are in µm, intensities in
-    photons, and backgrounds in photons per pixel. sCMOS calibration uses the units of a camera's
+    Lengths (positions, pixel sizes and edges, position uncertainties) are in µm. In an
+    `Emitter2D` or `Emitter3D`, `photons` counts photons, before QE; fitted `photons` and `bg` are
+    in the units of the data the fitter received. sCMOS calibration uses the units of a camera's
     specification sheet: offset in ADU, gain in e⁻/ADU, read noise in e⁻ rms. Frames, datasets
     and pixels are numbered from 1. [Conventions](guide/conventions.md) has the details.
 
 ## Where it fits
 
-SMLMCore holds the types that the JuliaSMLM packages share. Analysis packages such as GaussMLE,
-SMLMBoxer and SMLMAnalysis depend on SMLMData, which from 0.7.2 loads SMLMCore and re-exports its
-names, so their users get SMLMCore's types without loading it. GaussMLE re-exports `ROIBatch`,
+SMLMCore holds the types that the JuliaSMLM packages share. SMLMData 0.7.2 and later load
+SMLMCore and re-export its names, so packages that depend on those versions of SMLMData, and
+their users, get SMLMCore's types without loading it. GaussMLE re-exports `ROIBatch`,
 `SingleROI`, `IdealCamera`, `SCMOSCamera` and `@filter`, SMLMBoxer re-exports `ROIBatch` and
 `SingleROI`, and SMLMAnalysis re-exports `IdealCamera` and `SCMOSCamera`. A package that needs
 only the types depends on SMLMCore directly. File reading and writing (SMITE `.mat`) is in
@@ -27,9 +28,9 @@ using Pkg
 Pkg.add("SMLMCore")
 ```
 
-SMLMCore cannot share an environment with SMLMData 0.7.1 or earlier, which defines the same
-types; its compat on SMLMData (a weak dependency) is `>= 0.7.2`. Until SMLMData 0.7.2 is
-released, use SMLMCore in an environment without SMLMData, GaussMLE, SMLMBoxer or SMLMAnalysis.
+An environment that holds SMLMData 0.7.1 or earlier, directly or through a package that depends
+on it (GaussMLE, SMLMSim, SMLMBoxer, SMLMAnalysis and others), cannot add SMLMCore, because
+those versions define the same types: Pkg reports unsatisfiable requirements for SMLMData.
 
 ## Quick start
 
