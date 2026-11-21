@@ -1,19 +1,18 @@
 """
     @filter(smld, condition)
 
-Return a new SMLD with the emitters for which `condition` holds, a condition written in terms of
-emitter properties.
+Return a new SMLD with the emitters for which `condition` holds, a Julia expression written in
+terms of emitter properties.
 
-Every name in `condition` is read as an emitter property, except the operators `<`, `>`, `<=`,
-`>=`, `==`, `!=`, `in` and `∈`, and `&&` and `||`. A condition therefore holds only property
-names, number literals and tuples; comparisons may be chained (`1.0 <= x <= 5.0`). It cannot use
-a variable (`photons > threshold` reads `e.threshold`), a function (`abs(x)`), arithmetic
-(`x + y`), `!`, a range (`frame in 1:10`) or the operators `≤` and `≥`; each throws an error
-that names the missing field (a `FieldError` from Julia 1.12, an `ErrorException` before). For
-those, filter the emitters directly:
-
-    BasicSMLD(filter(e -> e.photons > threshold, smld.emitters), smld.camera,
-              smld.n_frames, smld.n_datasets, copy(smld.metadata))
+Each name in `condition` is an emitter property when the emitter has a property of that name,
+and otherwise the variable or function of that name where `@filter` is called. A condition can
+therefore mix properties with local variables, constants and functions:
+`@filter(smld, photons > threshold)`, `@filter(smld, abs(x) < 1.0)`,
+`@filter(smld, !(frame in skip))`, `@filter(smld, frame in 1:10 && x ≤ x_max)`. A name that is
+both an emitter property and a variable reads the property; write `\$name` for the variable:
+`@filter(smld, dataset == \$dataset)` keeps the emitters of the data set numbered by the
+variable `dataset`. A name that is neither throws an `UndefVarError` when the condition runs.
+The condition must give `true` or `false` for each emitter.
 
 The result has a new emitter vector, but its emitters are the input's own mutable objects:
 setting `bright.emitters[1].photons = 0` changes `smld` as well. `deepcopy` the result before
@@ -37,41 +36,79 @@ julia> length(@filter(smld, σ_x < 0.02 && frame in (1, 2)))
 
 julia> length(@filter(smld, 0.5 <= x <= 5.0))
 2
+
+julia> threshold = 1100.0;
+
+julia> length(@filter(smld, photons > threshold && abs(x - 3.0) ≤ 0.5))
+1
+
+julia> frame = 5;
+
+julia> length(@filter(smld, frame == \$frame))
+1
 ```
 """
-macro filter(smld, expr)
-    # Only replace symbols that are emitter fields
-    function replace_fields(ex)
-        if ex isa Expr
-            if ex.head == :(.)  # Already a field access
-                return ex
-            else
-                return Expr(ex.head, map(replace_fields, ex.args)...)
-            end
-        elseif ex isa Symbol && !(ex in [:&&, :||, :<, :>, :<=, :>=, :(==), :!=, :in, :∈])
-            # Convert symbol to field access unless it's an operator
-            return :(e.$ex)
+macro filter(smld, condition)
+    e = gensym(:emitter)
+    test = _filter_condition(condition, e)
+    return esc(:($(GlobalRef(@__MODULE__, :_filter_smld))($smld, $e -> $test)))
+end
+
+# The body of a `@filter` condition, rewritten as a function of the emitter `e`: a name is the
+# emitter's property when it has one and otherwise the caller's variable; `$name` is always the
+# caller's variable. Function positions, keyword names and bound names (in `->`, generators,
+# `let`) are left as written. The whole result is escaped by `@filter`, so every name not
+# rewritten resolves where `@filter` is called.
+function _filter_condition(ex, e::Symbol)
+    if ex isa Symbol
+        ex in (:end, :begin) && return ex
+        prop = QuoteNode(ex)
+        return :($(GlobalRef(Base, :hasproperty))($e, $prop) ?
+                 $(GlobalRef(Base, :getproperty))($e, $prop) : $ex)
+    elseif ex isa Expr
+        h, args = ex.head, ex.args
+        if h === :$
+            return args[1]
+        elseif h === :call
+            return Expr(:call, args[1], (_filter_argument(a, e) for a in args[2:end])...)
+        elseif h === :comparison  # a < b <= c: operands at odd positions, operators between
+            return Expr(:comparison,
+                        (isodd(i) ? _filter_condition(a, e) : a for (i, a) in enumerate(args))...)
+        elseif h === :.  # a.b reads property b of a; f.(x) broadcasts f
+            target = args[2] isa QuoteNode ? args[2] : _filter_condition(args[2], e)
+            return Expr(:., args[2] isa QuoteNode ? _filter_condition(args[1], e) : args[1], target)
+        elseif h === :-> || h === :(=)  # bound names stay; the body or value is a condition
+            return Expr(h, args[1], (_filter_condition(a, e) for a in args[2:end])...)
         else
-            return ex
+            return Expr(h, (_filter_condition(a, e) for a in args)...)
         end
+    else
+        return ex  # literals, quoted symbols, line numbers
     end
-    
-    condition = replace_fields(expr)
-    
-    return quote
-        local emitters = $(esc(smld)).emitters
-        local keep = Bool[]
-        for e in emitters
-            push!(keep, $condition)
-        end
-        typeof($(esc(smld)))(
-            emitters[keep],
-            $(esc(smld)).camera,
-            $(esc(smld)).n_frames,
-            $(esc(smld)).n_datasets,
-            copy($(esc(smld)).metadata)
-        )
+end
+
+# An argument of a call in a condition: a keyword keeps its name.
+function _filter_argument(ex, e::Symbol)
+    if ex isa Expr && ex.head === :kw
+        return Expr(:kw, ex.args[1], _filter_condition(ex.args[2], e))
+    elseif ex isa Expr && ex.head === :parameters
+        return Expr(:parameters, (_filter_argument(a, e) for a in ex.args)...)
+    else
+        return _filter_condition(ex, e)
     end
+end
+
+# The `@filter` result: the emitters for which `keep` holds, with the input's camera, frame and
+# data-set counts and a copy of its metadata.
+function _filter_smld(smld, keep)
+    emitters = smld.emitters
+    return typeof(smld)(
+        emitters[map(keep, emitters)],
+        smld.camera,
+        smld.n_frames,
+        smld.n_datasets,
+        copy(smld.metadata)
+    )
 end
 
 """

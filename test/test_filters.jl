@@ -558,3 +558,51 @@ _nd_alloc(v) = minimum(@allocated(emitter_ndims(v)) for _ in 1:5)
 
 
 end
+
+# A @filter condition may use the caller's variables and functions; 0.1.0 read every name in it
+# as an emitter field and threw for a variable, ≤, abs, ! or a range.
+@testset "@filter with names from the caller" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f, dataset = d)
+                   for (x, ph, f, d) in ((0.5, 900.0, 1, 1), (1.5, 1100.0, 2, 2), (-2.0, 1300.0, 3, 1))],
+                  cam, 3, 2, Dict{String,Any}("k" => 1))
+    xs(r) = [e.x for e in r.emitters]
+
+    thr = 1000.0
+    @test xs(@filter(s, photons > thr)) == [1.5, -2.0]
+    @test xs(@filter(s, x ≤ 1.0)) == [0.5, -2.0]
+    @test xs(@filter(s, x ≥ 1.0)) == [1.5]
+    @test xs(@filter(s, abs(x) < 1.0)) == [0.5]
+    @test xs(@filter(s, !(frame == 2))) == [0.5, -2.0]
+    @test xs(@filter(s, frame in 1:2)) == [0.5, 1.5]
+    @test xs(@filter(s, x + 1.0 > 2.0)) == [1.5]
+    @test xs(@filter(s, photons > thr && frame != 3)) == [1.5]
+    @test xs(@filter(s, x < Inf && photons < typemax(Float64))) == [0.5, 1.5, -2.0]
+    near(a; to) = abs(a - to) < 0.6
+    @test xs(@filter(s, near(x; to = 1.0))) == [0.5, 1.5]
+    @test xs(@filter(s, any(t -> photons > t, (1200.0, 1250.0)))) == [-2.0]
+
+    # A name that is both a property and a variable reads the property; $name is the variable
+    dataset = 2
+    @test xs(@filter(s, dataset == dataset)) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, dataset == $dataset)) == [1.5]
+    per_frame(s) = [length(@filter(s, frame == $f)) for f in 1:3]
+    @test per_frame(s) == [1, 1, 1]
+
+    # A name that is neither throws when the condition runs
+    @test_throws UndefVarError @filter(s, photons > not_defined_anywhere)
+
+    # The data-set expression is evaluated once
+    calls = Ref(0)
+    get_s() = (calls[] += 1; s)
+    @filter(get_s(), photons > 0)
+    @test calls[] == 1
+
+    # The result is as before: same type, camera and counts, copied metadata, the input's emitters
+    r = @filter(s, photons > thr)
+    @test r isa typeof(s)
+    @test r.camera === s.camera && r.n_frames == 3 && r.n_datasets == 2
+    @test r.metadata == s.metadata && r.metadata !== s.metadata
+    @test r.emitters[1] === s.emitters[2]
+    @test @inferred(SMLMCore._filter_smld(s, e -> e.photons > 1000.0)) isa typeof(s)
+end
