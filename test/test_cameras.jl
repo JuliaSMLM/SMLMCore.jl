@@ -76,6 +76,13 @@ using SMLMCore, Test
         @test px isa Float32 && py isa Float32
         @test px ≈ 1.0f0 && py ≈ 2.0f0
         @test physical_to_pixel(0.05, 0.15, 0.1) isa Tuple{Float64,Float64}
+        # Rational inputs give Float64, as in SMLMData 0.7.1; they gave Rationals, which can
+        # overflow (1//typemax(Int) + 1//2 threw an OverflowError)
+        @test physical_to_pixel(1//3, 2//3, 1//1) isa Tuple{Float64,Float64}
+        @test all(physical_to_pixel(1//3, 2//3, 1//1) .≈ (5 / 6, 7 / 6))
+        @test physical_to_pixel(1//typemax(Int), 2//3, 1//1)[1] ≈ 0.5
+        @test physical_to_pixel(big(1.0), big(2.0), big(1.0)) isa Tuple{BigFloat,BigFloat}
+        @test physical_to_pixel(1, 2, 1) === (1.5, 2.5)
         # A Float32 position with a Float64 pixel size promotes as division does
         @test physical_to_pixel(0.05f0, 0.15f0, 0.1) isa Tuple{Float64,Float64}
     end

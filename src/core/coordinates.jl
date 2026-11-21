@@ -35,7 +35,8 @@ square pixels of `pixel_size` µm at the sample with the camera's edges starting
 
 `px` is the column and `py` the row, 1-based, and `(1, 1)` is the center of the top-left pixel,
 so `px = x / pixel_size + 0.5`; the camera's corner, `(0, 0)` µm, is at `(0.5, 0.5)`. The result
-has the type of `x / pixel_size`, so Float32 inputs give Float32. For the integer index of the
+has the type of `x / pixel_size` when that is a floating-point type, so Float32 inputs give
+Float32; `Rational` inputs give `Float64`. For the integer index of the
 pixel that holds a position, use [`physical_to_pixel_index`](@ref).
 
 # Example
@@ -45,12 +46,17 @@ julia> physical_to_pixel(0.05, 0.25, 0.1)
 ```
 """
 function physical_to_pixel(x::Real, y::Real, pixel_size::Real)
-    # (0, 0) µm is the top-left corner of pixel (1, 1), at pixel coordinate (0.5, 0.5). The
-    # half is converted to the quotient's type so a Float32 input gives a Float32 result.
+    # (0, 0) µm is the top-left corner of pixel (1, 1), at pixel coordinate (0.5, 0.5).
     px = x / pixel_size
     py = y / pixel_size
-    return (px + oftype(px, 0.5), py + oftype(py, 0.5))
+    return (px + _half_pixel(px), py + _half_pixel(py))
 end
+
+# Half a pixel, added to a quotient `x / pixel_size`: in the quotient's own type when it is a
+# floating-point number (so Float32 stays Float32), and as a Float64 otherwise (so a Rational
+# quotient gives a Float64, and no Rational arithmetic can overflow).
+_half_pixel(q::AbstractFloat) = oftype(q, 0.5)
+_half_pixel(q::Real) = 0.5
 
 """
     physical_to_pixel_index(x, y, pixel_size) -> (px, py)
