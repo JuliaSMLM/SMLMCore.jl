@@ -185,16 +185,18 @@ checked for orientation: a transposed map is accepted silently. [sCMOS calibrati
 the signal chain these parameters describe.
 
 # Constructors
-- `SCMOSCamera(nx, ny, pixel_size, readnoise; offset=zero(T), gain=one(T), qe=one(T))`: `nx` ×
-  `ny` pixels of `pixel_size` µm at the sample, a number or a tuple `(size_x, size_y)`.
-- `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset=zero(T), gain=one(T), qe=one(T))`:
-  from pixel edges (µm, `Vector{T}`), which need not be uniform; `readnoise` is required.
+- `SCMOSCamera(nx, ny, pixel_size, readnoise; offset=0, gain=1, qe=1)`: `nx` × `ny` pixels of
+  `pixel_size` µm at the sample, a number or a tuple `(size_x, size_y)`.
+- `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset=0, gain=1, qe=1)`: from pixel
+  edges (µm, vectors), which need not be uniform; `readnoise` is required.
 
-`pixel_size` (or the edges), `readnoise`, `offset`, `gain` and `qe` share one number type `T`,
-the type of `pixel_size`: write `offset = 100.0`, not `100`, and pass maps as `Matrix{T}`. A call
-that mixes number types fails: with an `UndefVarError` (`T` not defined) when scalars of
-different types are passed positionally, a `MethodError` for a map of another element type, and
-a `TypeError` for a keyword. A map of the wrong size throws a `DimensionMismatch`.
+Each calibration value is a number or a map (a matrix). The camera's number type `T` is the
+promoted type of the numbers given: the pixel size (or the edges), `readnoise`, and `offset`,
+`gain` and `qe` when they are passed (a map counts by its element type). All `Float32` gives
+`SCMOSCamera{Float32}`; whole numbers take the type of the rest (`offset = 100` with a `Float64`
+pixel size gives `100.0`); a mix of `Float32` and `Float64` gives `Float64`. Every value is
+converted to `T`, and a map that is already a `Matrix{T}` is stored as given, not copied. A map
+of the wrong size throws a `DimensionMismatch`.
 
 # Example
 A 2048 × 2048 sensor of 6.5 µm pixels behind a 100× objective has pixels of 0.065 µm at the
@@ -232,53 +234,69 @@ struct SCMOSCamera{T<:Real} <: AbstractCamera
     qe::Union{T, Matrix{T}}
 end
 
+# A calibration value of an sCMOS camera: one number for every pixel, or a map of size (ny, nx).
+const _SCMOSParam = Union{Real, AbstractMatrix{<:Real}}
+
+# The number type a constructor argument brings to the camera's `T`; an argument not given
+# (`nothing`) brings none.
+_camera_eltype(x::Real) = typeof(x)
+_camera_eltype(x::Tuple{Real, Real}) = promote_type(typeof(x[1]), typeof(x[2]))
+_camera_eltype(x::AbstractArray{<:Real}) = eltype(x)
+_camera_eltype(::Nothing) = Union{}
+
+# A calibration value converted to the camera's `T`; `default` when not given.
+_camera_param(::Type{T}, x::Real, default) where {T} = convert(T, x)
+_camera_param(::Type{T}, x::AbstractMatrix{<:Real}, default) where {T} = convert(Matrix{T}, x)
+_camera_param(::Type{T}, ::Nothing, default) where {T} = convert(T, default)
+
+# Pixel size in x and y, in the camera's `T`.
+_pixel_sizes(::Type{T}, p::Real) where {T} = (convert(T, p), convert(T, p))
+_pixel_sizes(::Type{T}, p::Tuple{Real, Real}) where {T} = (convert(T, p[1]), convert(T, p[2]))
+
 function SCMOSCamera(
     nx::Integer,
     ny::Integer,
-    pixel_size::Union{T, Tuple{T,T}},
-    readnoise::Union{T, Matrix{T}};
-    offset::Union{T, Matrix{T}} = zero(T),
-    gain::Union{T, Matrix{T}} = one(T),
-    qe::Union{T, Matrix{T}} = one(T)
-) where T<:Real
-
-    # Compute pixel edges
-    if pixel_size isa Tuple
-        edges_x = collect(range(zero(T), nx * pixel_size[1], length=nx+1))
-        edges_y = collect(range(zero(T), ny * pixel_size[2], length=ny+1))
-    else
-        edges_x = collect(range(zero(T), nx * pixel_size, length=nx+1))
-        edges_y = collect(range(zero(T), ny * pixel_size, length=ny+1))
-    end
-
-    # Validate dimensions
-    _validate_camera_param(offset, nx, ny, "offset")
-    _validate_camera_param(gain, nx, ny, "gain")
-    _validate_camera_param(readnoise, nx, ny, "readnoise")
-    _validate_camera_param(qe, nx, ny, "qe")
-
-    return SCMOSCamera{T}(edges_x, edges_y, offset, gain, readnoise, qe)
+    pixel_size::Union{Real, Tuple{Real, Real}},
+    readnoise::_SCMOSParam;
+    offset::Union{_SCMOSParam, Nothing} = nothing,
+    gain::Union{_SCMOSParam, Nothing} = nothing,
+    qe::Union{_SCMOSParam, Nothing} = nothing
+)
+    T = promote_type(_camera_eltype(pixel_size), _camera_eltype(readnoise),
+                     _camera_eltype(offset), _camera_eltype(gain), _camera_eltype(qe))
+    px, py = _pixel_sizes(T, pixel_size)
+    edges_x = collect(range(zero(T), nx * px, length=nx+1))
+    edges_y = collect(range(zero(T), ny * py, length=ny+1))
+    return _scmos_camera(T, edges_x, edges_y, readnoise, offset, gain, qe)
 end
 
 function SCMOSCamera(
-    pixel_edges_x::Vector{T},
-    pixel_edges_y::Vector{T};
-    readnoise::Union{T, Matrix{T}},
-    offset::Union{T, Matrix{T}} = zero(T),
-    gain::Union{T, Matrix{T}} = one(T),
-    qe::Union{T, Matrix{T}} = one(T)
-) where T<:Real
+    pixel_edges_x::AbstractVector{<:Real},
+    pixel_edges_y::AbstractVector{<:Real};
+    readnoise::_SCMOSParam,
+    offset::Union{_SCMOSParam, Nothing} = nothing,
+    gain::Union{_SCMOSParam, Nothing} = nothing,
+    qe::Union{_SCMOSParam, Nothing} = nothing
+)
+    T = promote_type(_camera_eltype(pixel_edges_x), _camera_eltype(pixel_edges_y),
+                     _camera_eltype(readnoise), _camera_eltype(offset), _camera_eltype(gain),
+                     _camera_eltype(qe))
+    return _scmos_camera(T, convert(Vector{T}, pixel_edges_x), convert(Vector{T}, pixel_edges_y),
+                         readnoise, offset, gain, qe)
+end
 
-    nx = length(pixel_edges_x) - 1
-    ny = length(pixel_edges_y) - 1
-
-    # Validate dimensions
+# Check the maps' sizes against the edges and build the camera in `T`.
+function _scmos_camera(::Type{T}, edges_x::Vector{T}, edges_y::Vector{T},
+                       readnoise, offset, gain, qe) where {T}
+    nx = length(edges_x) - 1
+    ny = length(edges_y) - 1
     _validate_camera_param(offset, nx, ny, "offset")
     _validate_camera_param(gain, nx, ny, "gain")
     _validate_camera_param(readnoise, nx, ny, "readnoise")
     _validate_camera_param(qe, nx, ny, "qe")
-
-    return SCMOSCamera{T}(pixel_edges_x, pixel_edges_y, offset, gain, readnoise, qe)
+    return SCMOSCamera{T}(edges_x, edges_y,
+                          _camera_param(T, offset, 0), _camera_param(T, gain, 1),
+                          _camera_param(T, readnoise, 0), _camera_param(T, qe, 1))
 end
 
 # Validation helper
@@ -288,7 +306,7 @@ function _validate_camera_param(param::AbstractMatrix, nx, ny, name)
     size(param) == (ny, nx) ||
         throw(DimensionMismatch("$name size $(size(param)) must match ($ny, $nx) [rows, cols]"))
 end
-_validate_camera_param(param::Real, nx, ny, name) = nothing
+_validate_camera_param(param::Union{Real, Nothing}, nx, ny, name) = nothing
 
 # Display methods
 function Base.show(io::IO, cam::SCMOSCamera{T}) where T

@@ -408,4 +408,49 @@ end
         str_rect = sprint(show, cam_rect)
         @test contains(str_rect, "0.1×0.15μm")
     end
+
+    # Arguments of any real number type are promoted to one camera type; 0.1.0 refused a whole
+    # number or a mix of Float32 and Float64 with an UndefVarError, TypeError or MethodError.
+    @testset "Number types are promoted" begin
+        c = SCMOSCamera(64, 64, 0.1, 1.6; offset = 100, gain = 2, qe = 1)
+        @test c isa SCMOSCamera{Float64}
+        @test c.offset === 100.0 && c.gain === 2.0 && c.qe === 1.0
+        c = SCMOSCamera(64, 64, 0.1, 2)
+        @test c isa SCMOSCamera{Float64} && c.readnoise === 2.0
+        c = SCMOSCamera(64, 64, 0.1f0, 1.6)
+        @test c isa SCMOSCamera{Float64} && c.readnoise === 1.6
+        @test c.pixel_edges_x[2] == Float64(0.1f0)
+        m32 = fill(1.5f0, 64, 64)
+        c = SCMOSCamera(64, 64, 0.1, m32)
+        @test c isa SCMOSCamera{Float64} && c.readnoise isa Matrix{Float64} && c.readnoise == m32
+        @test SCMOSCamera(10, 10, (0.1f0, 0.2), 1.6f0) isa SCMOSCamera{Float64}
+
+        # All Float32 stays Float32, whole numbers included; a map of type T is stored as given
+        c = SCMOSCamera(64, 64, 0.1f0, m32; offset = 100, gain = 0.5f0)
+        @test c isa SCMOSCamera{Float32}
+        @test c.readnoise === m32 && c.offset === 100.0f0 && c.qe === 1.0f0
+        @test SCMOSCamera(10, 10, (0.1f0, 0.2f0), 1.6f0) isa SCMOSCamera{Float32}
+        @test @inferred(SCMOSCamera(64, 64, 0.1f0, 1.6f0; offset = 100)) isa SCMOSCamera{Float32}
+
+        # A call of one number type gives what 0.1.0 gave
+        c = SCMOSCamera(10, 10, 0.1, 1.6)
+        @test c.offset === 0.0 && c.gain === 1.0 && c.qe === 1.0
+        @test c.pixel_edges_x == collect(range(0.0, 10 * 0.1, length = 11))
+
+        # The edges form promotes the same way, and takes any vector of edges
+        ex32 = collect(range(0.0f0, 1.0f0, length = 11))
+        c = SCMOSCamera(ex32, collect(range(0.0, 1.0, length = 11)); readnoise = 1)
+        @test c isa SCMOSCamera{Float64} && c.readnoise === 1.0 && c.pixel_edges_x == Float64.(ex32)
+        c = SCMOSCamera(ex32, copy(ex32); readnoise = 1.6f0)
+        @test c isa SCMOSCamera{Float32} && c.pixel_edges_x === ex32
+        @test SCMOSCamera(0:0.1:1, 0:0.1:1; readnoise = 1.6) isa SCMOSCamera{Float64}
+
+        # A map of another matrix type is stored as a Matrix{T}
+        c = SCMOSCamera(4, 2, 0.1, view(fill(2.0, 2, 8), :, 1:4))
+        @test c.readnoise isa Matrix{Float64} && c.readnoise == fill(2.0, 2, 4)
+
+        # A value that is not a number or a map of numbers, or a map of the wrong size, still fails
+        @test_throws TypeError SCMOSCamera(4, 4, 0.1, 1.6; offset = "100")
+        @test_throws DimensionMismatch SCMOSCamera(4, 4, 0.1, 1.6; gain = fill(1, 3, 3))
+    end
 end
