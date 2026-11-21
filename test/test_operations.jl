@@ -501,14 +501,15 @@ end
                 @test (t2.frame, t2.t) == (2, 0.02)
             end
 
-            @testset "Mutable emitter with a field left undefined" begin
-                # copied by deepcopy; a defined object field stays shared
+            @testset "Mutable emitter with an object field, defined or not" begin
+                # deep-copied, so the renumbered emitter shares nothing with the input
                 m = merge_smld(sm([ExtraTestEmitter(1, 1)], 10), sm([ExtraTestEmitter(2, 1)], 10); adjust_frames=true)
                 @test m.emitters[2].frame == 12 && !isdefined(m.emitters[2], :extra)
                 v = [1.0]
                 in2 = ExtraTestEmitter(2, 1, v)
                 m = merge_smld(sm([ExtraTestEmitter(1, 1, [0.0])], 10), sm([in2], 10); adjust_frames=true)
-                @test m.emitters[2].frame == 12 && m.emitters[2].extra === v && in2.frame == 2
+                @test m.emitters[2].frame == 12 && m.emitters[2].extra == v && in2.frame == 2
+                @test m.emitters[2].extra !== v && in2.extra === v
             end
 
             @testset "Input vector of abstract element type" begin
@@ -620,4 +621,47 @@ end
         push!(c.emitters, Emitter2DFit{Float64}(9.0, 9.0, 1.0, 1.0, 0.1, 0.1, 1.0, 1.0))
         @test length(s.emitters) == 3
     end
+end
+
+# A custom data set whose counts are BigInts, and a mutable emitter whose frame is a property
+# held in a vector: merge_smld converted every count to Int before checking whether it
+# renumbers (an InexactError beyond typemax(Int)), and renumbering wrote the new frame through
+# a vector shared with the input emitter.
+struct BigCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::BigInt
+    n_datasets::BigInt
+    metadata::Dict{String,Any}
+end
+mutable struct StoredFrameEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    store::Vector{Int}
+    dataset::Int
+end
+Base.getproperty(e::StoredFrameEmitter, s::Symbol) =
+    s === :frame ? getfield(e, :store)[1] : getfield(e, s)
+Base.setproperty!(e::StoredFrameEmitter, s::Symbol, v) =
+    s === :frame ? (getfield(e, :store)[1] = v) : setfield!(e, s, v)
+
+@testset "merge_smld with large counts and property-held frames" begin
+    cam = IdealCamera(64, 64, 0.1)
+    e = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    huge = big(typemax(Int)) + 1
+    b = BigCountSMLD([e], cam, big(1), huge, Dict{String,Any}())
+    m = merge_smld(b, b)
+    @test m.n_datasets == huge && m.n_frames == 1
+    m = merge_smld(b, b; adjust_frames = true)
+    @test [x.frame for x in m.emitters] == [1, 2] && m.n_frames == 2
+    # A dataset number beyond Int does not fit the emitters' Int field
+    @test_throws InexactError merge_smld(b, b; adjust_datasets = true)
+
+    mk() = BasicSMLD([StoredFrameEmitter(1.0, 1.0, [1], 1), StoredFrameEmitter(2.0, 2.0, [2], 1)],
+                     cam, 2, 1, Dict{String,Any}())
+    a, c = mk(), mk()
+    m = merge_smld(a, c; adjust_frames = true)
+    @test [x.frame for x in m.emitters] == [1, 2, 3, 4]
+    @test [x.frame for x in c.emitters] == [1, 2]
+    @test [x.frame for x in a.emitters] == [1, 2]
 end

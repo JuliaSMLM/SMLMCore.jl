@@ -104,8 +104,10 @@ the missing field (a `FieldError` from Julia 1.12, an `ErrorException` before).
 - The inputs are never modified. Each renumbered emitter is a new object, one per entry, even
   when an input lists the same emitter object more than once. Only the requested numbers are
   read and changed, so an emitter type with a `frame` field and no `dataset` field can be
-  renumbered by frame, and immutable emitter types can be renumbered. Fields of a renumbered
-  emitter that hold arrays or other objects stay shared with the input emitter. The first
+  renumbered by frame, and immutable emitter types can be renumbered. A renumbered mutable
+  emitter shares nothing with the input emitter: one whose fields are all plain data is copied
+  field by field, and any other is deep-copied, so setting its number (through the type's own
+  setter, or a property kept in an array) cannot reach the input. The first
   input's emitters (and, without renumbering, every input's) are the inputs' own objects, as in
   [`cat_smld`](@ref).
 - Metadata is a copy of the first input's, plus `"merged_from"` (the number of inputs),
@@ -153,8 +155,8 @@ function merge_smld(smlds::Vector{<:AbstractSMLD};
     renumber = adjust_frames || adjust_datasets
     all_emitters = copy(smlds[1].emitters)
     sizehint!(all_emitters, sum(smld -> length(smld.emitters), smlds))
-    frame_offset = Int(smlds[1].n_frames)
-    dataset_offset = Int(smlds[1].n_datasets)
+    frame_offset = smlds[1].n_frames
+    dataset_offset = smlds[1].n_datasets
     for smld in smlds[2:end]
         if renumber
             _append_renumbered!(all_emitters, smld.emitters,
@@ -162,8 +164,8 @@ function merge_smld(smlds::Vector{<:AbstractSMLD};
         else
             append!(all_emitters, smld.emitters)
         end
-        frame_offset += Int(smld.n_frames)
-        dataset_offset += Int(smld.n_datasets)
+        frame_offset += smld.n_frames
+        dataset_offset += smld.n_datasets
     end
 
     new_n_frames = adjust_frames ? frame_offset : maximum(smld.n_frames for smld in smlds)
@@ -191,7 +193,7 @@ end
 merge_smld(smlds::AbstractSMLD...; kwargs...) = merge_smld(collect(smlds); kwargs...)
 
 # Function barrier: `emitters` has a concrete type here even when the input vector does not.
-function _append_renumbered!(dest, emitters, df::Int, dd::Int)
+function _append_renumbered!(dest, emitters, df::Real, dd::Real)
     for e in emitters
         push!(dest, _renumbered(e, df, dd))
     end
@@ -200,10 +202,10 @@ end
 
 # A new emitter equal to `e` except that its frame and dataset are moved by `df` and `dd`; `e` is
 # not changed, and a number with a zero move is not read or written. A mutable emitter is copied
-# field by field and set through `setproperty!` (so a type's own setter, and frame or dataset held
-# as properties, work as before). An immutable emitter is rebuilt from its fields, which needs a
+# (see `_field_copy`) and set through `setproperty!` (so a type's own setter, and frame or dataset
+# held as properties, work as before). An immutable emitter is rebuilt from its fields, which needs a
 # `frame` field only for a frame move and a `dataset` field only for a dataset move.
-@generated function _renumbered(e::E, df::Int, dd::Int) where {E<:AbstractEmitter}
+@generated function _renumbered(e::E, df::Real, dd::Real) where {E<:AbstractEmitter}
     if ismutabletype(E)
         return quote
             c = _field_copy(e)
@@ -242,15 +244,14 @@ end
     return Expr(:block, checks..., body)
 end
 
-# A field-by-field copy of a mutable struct (fields that hold objects are shared). A field that
-# can be left undefined is checked first; with one undefined, the copy is a deepcopy instead.
+# A copy of a mutable struct that shares nothing with it: field by field when every field is
+# plain data, and a `deepcopy` otherwise. A field that holds an object (a vector that a property
+# reads and writes, say) would be shared by a field-by-field copy, so a write through the copy's
+# setter would change the original.
 @generated function _field_copy(e::E) where {E}
     n = fieldcount(E)
-    build = Expr(:new, E, Any[:(getfield(e, $i)) for i in 1:n]...)
-    checks = Any[:(isdefined(e, $i)) for i in 1:n if !isbitstype(fieldtype(E, i))]
-    isempty(checks) && return build
-    alldefined = foldl((x, y) -> :($x && $y), checks)
-    return :($alldefined ? $build : deepcopy(e))
+    all(i -> isbitstype(fieldtype(E, i)), 1:n) || return :(deepcopy(e))
+    return Expr(:new, E, Any[:(getfield(e, $i)) for i in 1:n]...)
 end
 
 # Two cameras are the same when they have the same type and the same value in every field: pixel
