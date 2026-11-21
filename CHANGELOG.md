@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `@filter` conditions may use the caller's variables and functions. A name is an emitter property when the emitter has one of that name, and otherwise the variable or function of that name where `@filter` is called, so `photons > threshold`, `x ≤ 1.0`, `abs(x) < 1.0`, `!(frame == 2)` and `frame in 1:10` work; each threw an error naming a missing field. `$name` reads the variable when a property has the same name. Every condition that worked before gives the same result. The data-set expression is evaluated once, and the filter allocates less.
 - `SCMOSCamera` promotes its arguments to one number type: whole numbers (`offset = 100`, `readnoise = 2`) take the type of the rest, and `Float32` with `Float64` gives `Float64`; each threw an `UndefVarError`, `TypeError` or `MethodError`. A call of one number type gives the same camera as before. The edges form accepts any vector of edges.
+- `physical_to_pixel` gives `Float64` for `Rational` inputs, as SMLMData 0.7.1 did; 0.1.0 gave Rationals, and a sum that overflowed threw an `OverflowError`. Floating-point inputs keep their type, as in 0.1.0.
+- `merge_smld` keeps each input's `n_frames` and `n_datasets` in their own type; it converted them to `Int` first, so counts beyond `typemax(Int)` threw an `InexactError` even with no renumbering.
+- `merge_smld` with `adjust_frames` or `adjust_datasets` no longer changes an input emitter whose frame or dataset is kept in an array: a renumbered mutable emitter now shares nothing with the input emitter (a type whose fields are all plain data is copied field by field, any other deep-copied). Object fields of renumbered emitters were shared with the input.
 
 ## [0.1.0] - 2026-11-11
 

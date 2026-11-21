@@ -310,6 +310,8 @@ edges_x, edges_y = compute_bin_edges(1:512, 1:512, 0.1)    # pixel edges, µm, f
   `n` covers `[(n - 1)·pixel_size, n·pixel_size)`, up to floating-point rounding (a position
   computed as `(n - 1) * pixel_size` can fall in pixel `n - 1`). It does not check bounds.
 - `pixel_to_physical` returns `pixel_size`'s type, so `pixel_size` must be a float.
+  `physical_to_pixel` keeps a floating-point input's type (Float32 stays Float32), and gives
+  Float64 for `Rational` inputs.
 
 ### Filtering Operations
 
@@ -469,8 +471,6 @@ end
   its emitters are the input's own mutable objects: setting `bright.emitters[1].photons = 0`
   changes `smld` as well. `deepcopy` the result before changing emitters in place. `cat_smld`
   and `merge_smld` share emitters with their inputs in the same way, except renumbered ones.
-- A variable in an `@filter` condition is read as an emitter property; filter
-  `smld.emitters` with `filter` instead.
 - Applying an ROI filter of the wrong dimension, or `filter_frames` to emitters without a
   `frame` field, throws an error.
 
