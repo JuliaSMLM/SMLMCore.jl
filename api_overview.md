@@ -212,7 +212,7 @@ cam_scmos = SCMOSCamera(512, 512, 0.1, 1.6)     # 1.6 e⁻ rms, the same for eve
 # A 2048 × 2048 sensor of 6.5 µm pixels behind a 100× objective: 0.065 µm at the sample
 cam_spec = SCMOSCamera(2048, 2048, 0.065, 1.6; offset = 100.0, gain = 0.46, qe = 0.72)
 
-# Per-pixel maps have size (ny, nx) and the number type of pixel_size
+# Per-pixel maps have size (ny, nx)
 readnoise_map = 1.6 .+ 0.2 .* rand(512, 512)
 qe_map = fill(0.8, 512, 512)
 cam_maps = SCMOSCamera(512, 512, 0.1, readnoise_map; offset = 100.0, gain = 0.5, qe = qe_map)
@@ -220,11 +220,11 @@ cam_maps = SCMOSCamera(512, 512, 0.1, readnoise_map; offset = 100.0, gain = 0.5,
 
 - `IdealCamera(1:512, 1:512, 0.1)` gives the same camera as `IdealCamera(512, 512, 0.1)`: only
   the ranges' lengths are used, and the edges always start at 0.
-- In an `SCMOSCamera` call, `pixel_size`, `readnoise`, `offset`, `gain` and `qe` share one
-  number type, the type of `pixel_size`. A call that mixes number types fails: with an
-  `UndefVarError` (`T` not defined) when scalars of different types are passed positionally, a
-  `MethodError` for a map of another element type, and a `TypeError` for a keyword. Convert the
-  values first, and write `offset = 100.0`, not `100`.
+- An `SCMOSCamera`'s number type `T` is the promoted type of the numbers given: `pixel_size`
+  (or the edges), `readnoise`, and `offset`, `gain` and `qe` when passed (a map by its element
+  type). All `Float32` gives `SCMOSCamera{Float32}`; whole numbers take the type of the rest
+  (`offset = 100` gives `100.0` beside a `Float64` pixel size); `Float32` with `Float64` gives
+  `Float64`. A map that is already a `Matrix{T}` is stored as given.
 - `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset, gain, qe)` builds a camera from
   its pixel edges (µm), which need not be uniform.
 
@@ -317,6 +317,10 @@ edges_x, edges_y = compute_bin_edges(1:512, 1:512, 0.1)    # pixel edges, µm, f
 bright = @filter(smld, photons > 1000)                     # select bright emitters
 precise = @filter(smld, σ_x < 0.02 && σ_y < 0.02)          # select precise localizations
 inside = @filter(smld, 0.5 <= x <= 2.0 && frame in (1, 2)) # chained comparison, tuple
+threshold = 1000.0
+bright2 = @filter(smld, photons > threshold && abs(x - 1.0) ≤ 0.5) # a variable, a function
+frame = 2
+this_frame = @filter(smld, frame == $frame)   # $name: the variable, not the property
 
 frame_2 = filter_frames(smld, 2)              # one frame
 early_frames = filter_frames(smld, 1:10)      # a range of frames
@@ -324,19 +328,12 @@ some_frames = filter_frames(smld, [1, 3, 5])  # a vector of frames
 
 region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclusive
 # 3D emitters: filter_roi(smld3d, (0.0, 2.0), (1.0, 3.0), (-0.5, 0.5))
-
-# A threshold held in a variable: filter the emitters directly
-threshold = 1000.0
-bright2 = BasicSMLD(filter(e -> e.photons > threshold, smld.emitters), smld.camera,
-                    smld.n_frames, smld.n_datasets, copy(smld.metadata))
 ```
 
-- In `@filter`, every name in the condition is read as an emitter property, except the
-  operators `<`, `>`, `<=`, `>=`, `==`, `!=`, `in` and `∈`, and `&&` and `||`. A condition
-  therefore holds only property names, number literals and tuples. It cannot use a variable
-  (`photons > threshold` reads `e.threshold`), a function (`abs(x)`), arithmetic (`x + y`), `!`,
-  a range (`frame in 1:10`) or `≤` and `≥`; each throws an error that names the missing field
-  (a `FieldError` from Julia 1.12, an `ErrorException` before).
+- In `@filter`, a name in the condition is an emitter property when the emitter has one of that
+  name, and otherwise the variable or function of that name where `@filter` is called. A name
+  that is both reads the property; `$name` reads the variable. A name that is neither throws an
+  `UndefVarError` when the condition runs.
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
@@ -462,9 +459,8 @@ end
 
 ### Types
 - The emitter keyword constructors need their positional values already of type `T`.
-- `SCMOSCamera` arguments share one number type. A call that mixes number types fails: with an
-  `UndefVarError` (`T` not defined) when scalars of different types are passed positionally, a
-  `MethodError` for a map of another element type, and a `TypeError` for a keyword.
+- `SCMOSCamera` promotes its arguments to one number type, `T`: all `Float32` stays `Float32`,
+  and `Float32` with `Float64` gives `Float64`.
 - `BasicSMLD` infers `T` from the camera's pixel edges, and its metadata must be a
   `Dict{String,Any}`.
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `@filter` conditions may use the caller's variables and functions. A name is an emitter property when the emitter has one of that name, and otherwise the variable or function of that name where `@filter` is called, so `photons > threshold`, `x ≤ 1.0`, `abs(x) < 1.0`, `!(frame == 2)` and `frame in 1:10` work; each threw an error naming a missing field. `$name` reads the variable when a property has the same name. Every condition that worked before gives the same result. The data-set expression is evaluated once, and the filter allocates less.
+- `SCMOSCamera` promotes its arguments to one number type: whole numbers (`offset = 100`, `readnoise = 2`) take the type of the rest, and `Float32` with `Float64` gives `Float64`; each threw an `UndefVarError`, `TypeError` or `MethodError`. A call of one number type gives the same camera as before. The edges form accepts any vector of edges.
+
 ## [0.1.0] - 2026-11-11
 
 ### Changed
