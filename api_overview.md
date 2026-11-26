@@ -218,8 +218,10 @@ qe_map = fill(0.8, 512, 512)
 cam_maps = SCMOSCamera(512, 512, 0.1, readnoise_map; offset = 100.0, gain = 0.5, qe = qe_map)
 ```
 
-- `IdealCamera(1:512, 1:512, 0.1)` gives the same camera as `IdealCamera(512, 512, 0.1)`: only
-  the ranges' lengths are used, and the edges always start at 0.
+- `IdealCamera(1:512, 1:512, 0.1)` and `IdealCamera(0:511, 0:511, 0.1)` give the same camera as
+  `IdealCamera(512, 512, 0.1)`: a range numbers the whole sensor's pixels from 0 or from 1, and
+  the edges start at 0. A range that starts anywhere else (a crop such as `101:612`) throws an
+  `ArgumentError`; build a cropped camera from its pixel edges, `IdealCamera(edges_x, edges_y)`.
 - An `SCMOSCamera`'s number type `T` is the promoted type of the numbers given: `pixel_size`
   (or the edges), `readnoise`, and `offset`, `gain` and `qe` when passed (a map by its element
   type). All `Float32` gives `SCMOSCamera{Float32}`; whole numbers take the type of the rest
@@ -341,8 +343,9 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclu
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
   `Emitter3D` throw an error that names the missing field.
 - `filter_roi` bounds are inclusive. A range's smallest and largest elements are the bounds, so
-  `0.0:0.3:1.0` stops at 0.9; prefer tuples. The 2D form needs 2D emitters and the 3D form 3D
-  emitters.
+  `0.0:0.3:1.0` stops at 0.9; pass tuples. Any range other than whole numbers in steps of 1
+  (`0:2`) logs a warning once per Julia session, since a range that lost its stop cannot be told
+  from one written to stop there. The 2D form needs 2D emitters and the 3D form 3D emitters.
 
 ```julia
 # Spatial dimension: what the type declares (SMLMCore's emitter types declare 2 or 3), else 3
