@@ -935,3 +935,107 @@ Base.setproperty!(e::NarrowSetterEmitter, s::Symbol, v) = setfield!(e, s, v)
                    adjust_frames = true, adjust_datasets = true)
     @test m.emitters[2].frame === Int32(11) && m.emitters[2].dataset === Int32(2)
 end
+
+# A const model, an unset cache and a measurement after it; an unset frame behind a getter next
+# to a const field; counts of any real type; a dataset read through an unlisted getter and
+# changed by the frame setter; an unset dataset beside a setter that writes only its own field;
+# a getter that fills its field on first read; a setter that clamps; a NaN frame
+mutable struct HoleBeforeMeasurement <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+    const model::Vector{Int}
+    cache::Vector{Int}
+    photons::Float64
+    function HoleBeforeMeasurement(f, d, m, p)
+        e = new(f, d, m)
+        e.photons = p
+        return e
+    end
+end
+mutable struct ConstSourceEmitter <: SMLMCore.AbstractEmitter
+    const source_frame::Int
+    dataset::Int
+    frame::Integer
+    ConstSourceEmitter(s, d) = new(s, d)
+end
+Base.getproperty(e::ConstSourceEmitter, s::Symbol) =
+    s === :frame && !isdefined(e, :frame) ? getfield(e, :source_frame) : getfield(e, s)
+struct RealCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Real
+    n_datasets::Real
+    metadata::Dict{String,Any}
+end
+mutable struct HiddenDatasetEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    ds::Int
+end
+Base.getproperty(e::HiddenDatasetEmitter, s::Symbol) = s === :dataset ? getfield(e, :ds) : getfield(e, s)
+Base.setproperty!(e::HiddenDatasetEmitter, s::Symbol, v) =
+    s === :frame ? (setfield!(e, :ds, getfield(e, :ds) + 1); setfield!(e, :frame, v)) : setfield!(e, s, v)
+mutable struct UnsetDatasetSetter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Integer
+    UnsetDatasetSetter(f) = (e = new(); setfield!(e, :frame, f); e)
+end
+Base.setproperty!(e::UnsetDatasetSetter, s::Symbol, v) = setfield!(e, s, convert(fieldtype(typeof(e), s), v))
+mutable struct LazyFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Integer
+    source_frame::Int
+    dataset::Int
+    LazyFrameEmitter(s, d) = (e = new(); setfield!(e, :source_frame, s); setfield!(e, :dataset, d); e)
+end
+Base.getproperty(e::LazyFrameEmitter, s::Symbol) = s === :frame ?
+    (isdefined(e, :frame) || setfield!(e, :frame, getfield(e, :source_frame)); getfield(e, :frame)) :
+    getfield(e, s)
+mutable struct ClampedFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+end
+Base.setproperty!(e::ClampedFrameEmitter, s::Symbol, v) =
+    setfield!(e, s, s === :frame ? min(Int(v), 15) : convert(Int, v))
+
+@testset "merge_smld keeps every set field, every count exact, and its inputs untouched" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf, nd = 1) = BasicSMLD(v, cam, nf, nd, Dict{String,Any}())
+
+    # A hole before a measurement in a type with a const field: the measurement is kept
+    model = [1, 2]
+    m = merge_smld(sm([HoleBeforeMeasurement(1, 1, model, 1.0)], 10),
+                   sm([HoleBeforeMeasurement(1, 1, model, 4321.0)], 10); adjust_frames = true)
+    @test m.emitters[2].photons == 4321.0 && m.emitters[2].frame == 11 && !isdefined(m.emitters[2], :cache)
+    # an unset frame behind a getter, beside a const field, moves from the getter, as in 0.1.0
+    m = merge_smld(sm([ConstSourceEmitter(1, 1)], 10), sm([ConstSourceEmitter(7, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17
+
+    # Counts compared and summed exactly, whatever their types
+    fe(f) = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+    rc(f, nf) = RealCountSMLD([fe(f)], cam, nf, 1, Dict{String,Any}())
+    m = merge_smld(rc(16_777_217, 16_777_217), rc(1, Float32(16_777_216)))
+    @test m.n_frames == 16_777_217
+    m = merge_smld(rc(1, Float32(2^24)), rc(1, 1//1); adjust_frames = true)
+    @test m.n_frames == 2^24 + 1 && m.emitters[2].frame == 2^24 + 1
+
+    # A setter that changes the other number is refused, also through an unlisted getter, and
+    # also when only datasets move
+    @test_throws ArgumentError merge_smld(sm([HiddenDatasetEmitter(1, 1)], 10),
+                                          sm([HiddenDatasetEmitter(1, 1)], 10); adjust_frames = true)
+    @test_throws ArgumentError merge_smld(sm([DatasetCoupledEmitter(1, 1)], 10, 1),
+                                          sm([DatasetCoupledEmitter(1, 1)], 10, 1); adjust_datasets = true)
+    # an unset number the merge does not move is fine, as in 0.1.0
+    m = merge_smld(sm([UnsetDatasetSetter(1)], 2), sm([UnsetDatasetSetter(1)], 2); adjust_frames = true)
+    @test m.emitters[2].frame == 3
+    # a setter that stores something else for its own number is its business, as in 0.1.0
+    m = merge_smld(sm([ClampedFrameEmitter(1, 1)], 10), sm([ClampedFrameEmitter(7, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 15
+
+    # A getter that fills its field on first read fills the copy's, not the input's
+    lazy = LazyFrameEmitter(7, 1)
+    m = merge_smld(sm([LazyFrameEmitter(1, 1)], 10), sm([lazy], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17 && !isdefined(lazy, :frame)
+
+    # A NaN frame stays NaN, as in 0.1.0
+    m = merge_smld(sm([FloatFrameEmitter(1f0, 1)], 10), sm([FloatFrameEmitter(NaN32, 1)], 10); adjust_frames = true)
+    @test isnan(m.emitters[2].frame)
+end
