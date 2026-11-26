@@ -698,6 +698,7 @@ end
     @test_logs filter_roi(s2, 0:2, 0:2)
     @test_logs filter_roi(s2, Base.OneTo(2), 0:2)
     @test_logs filter_roi(s2, 0:1:2, 2:-1:0)                    # step 1 written out, or -1
+    @test_logs filter_roi(s2, 0:2, UnitRange(0, 2))
     @test_logs filter_roi(s3, (0.0, 2.0), (0.0, 2.0), (0.0, 1.0))
 
     # Any other range warns; the bounds and so the result are those of 0.1.0
@@ -718,4 +719,63 @@ end
         filter_roi(s2, 0.0:2.0, 1.0:3.0)
         filter_roi(s3, 0.0:2.0, 0.0:2.0, 0.0:1.0)
     end
+end
+
+# A condition's assignments must not reach the caller's locals
+function _filter_assigns(s)
+    y2 = 100.0
+    @filter(s, begin y2 = 2x; y2 > 1.0 end)
+    return y2
+end
+function _filter_loop_assigns(s)
+    t = 0
+    @filter(s, begin for i in 1:2; t = frame; end; true end)
+    return t
+end
+
+@testset "@filter follows Julia's scope rules" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+                   for (x, ph, f) in ((0.5, 900.0, 1), (1.5, 1100.0, 2), (-2.0, 1300.0, 3))], cam, 3, 1)
+    xs(r) = [e.x for e in r.emitters]
+    every = [0.5, 1.5, -2.0]
+
+    # Loops, local declarations, functions it defines, catch, assignments inside if, while
+    @test xs(@filter(s, begin acc = 0.0; for x in (1.0, 2.0); acc += x; end; acc > 2.5 end)) == every
+    @test xs(@filter(s, begin local x = 10; x > 5 end)) == every
+    @test xs(@filter(s, begin f(x) = x > 5; f(10) end)) == every
+    @test xs(@filter(s, begin function g(x) x > 5 end; g(10) end)) == every
+    @test xs(@filter(s, try error("a"); catch x; x isa ErrorException end)) == every
+    @test xs(@filter(s, begin if true; x = 10; end; x > 5 end)) == every
+    @test xs(@filter(s, begin y = 0; for x in (10,); y = x; end; y > 5 end)) == every
+    @test xs(@filter(s, begin i = 0; while i < 3; i += 1; end; i == 3 end)) == every
+    @test xs(@filter(s, begin for i in 1:1; x = 10; end; x > 1.0 end)) == [1.5]  # the loop's x is its own
+
+    # The caller's variables are not written
+    @test _filter_assigns(s) == 100.0
+    @test _filter_loop_assigns(s) == 0
+
+    # `$expr` is the caller's value, whatever the condition binds
+    x = 7
+    @test xs(@filter(s, any(x -> x == $x, (4,)))) == Float64[]
+    @test xs(@filter(s, any(x -> x == $x, (7,)))) == every
+    f = _ -> false
+    @test xs(@filter(s, let f = _ -> true; $f(x) end)) == Float64[]
+    calls = Ref(0)
+    count_call() = (calls[] += 1; 1.0)
+    @filter(s, x > $(count_call()))
+    @test calls[] == 1                                        # evaluated once
+
+    # Macros expand first: a nested @filter has its own emitters; @isdefined sees the caller
+    t = BasicSMLD([Emitter2DFit{Float64}(9.0, 1.0, 1.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1)
+    @test xs(@filter(s, !isempty((@filter(t, x > 5)).emitters))) == every
+    @test xs(@filter(s, length(@filter(s, frame == 2)) == 1)) == every
+    @test xs(@filter(s, @isdefined(no_such_thing) || x > 1)) == [1.5]
+
+    # Operators passed as values keep their meaning
+    @test xs(@filter(s, all((.>)([x], 0)))) == [0.5, 1.5]
+    @test xs(@filter(s, reduce(+, (1, 2)) == 3)) == every
+
+    # A definition that cannot appear in a function is refused when the macro expands
+    @test_throws Exception macroexpand(@__MODULE__, :(@filter(s, begin struct Q end; true end)))
 end
