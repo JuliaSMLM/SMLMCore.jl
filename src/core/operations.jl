@@ -105,15 +105,17 @@ the missing field (a `FieldError` from Julia 1.12, an `ErrorException` before).
   when an input lists the same emitter object more than once. Only the requested numbers are
   read and changed, so an emitter type with a `frame` field and no `dataset` field can be
   renumbered by frame, and immutable emitter types can be renumbered. A renumbered emitter is
-  rebuilt from the input's fields, with the moved numbers computed from `e.frame` and
-  `e.dataset`, so fields that hold arrays or other objects stay shared with the input emitter
-  (fields left unset stay unset), as `cat_smld` shares whole emitters. A type with its own
-  `setproperty!` (a frame kept in an array, say, or a setter that keeps another field in step) is
-  deep-copied instead and set through its setter, both numbers computed before either is set, so
-  the write cannot reach the input; storage that `deepcopy` cannot copy, such as memory behind a
-  raw pointer, is not supported. A moved number is stored in the field's type (through a setter,
-  in the property's type); one that does not fit throws an `OverflowError` or `InexactError`, as
-  does a float number that cannot hold the moved value exactly. The first input's emitters (and,
+  rebuilt from the input's fields, a move starting from `e.frame` and `e.dataset` for a mutable
+  type and from the fields for an immutable one, as in 0.1.0, so fields that hold arrays or other
+  objects stay shared with the input emitter (fields left unset stay unset), as `cat_smld` shares
+  whole emitters. A type with its own `setproperty!` (a frame kept in an array, say, or a setter
+  that keeps another field in step) is deep-copied instead and set through its setter, both
+  numbers computed before either is set, so the write cannot reach the input; a setter that also
+  changes the number not being set throws an `ArgumentError`, and storage that `deepcopy`
+  cannot copy, such as memory behind a raw pointer, is not supported. A moved number is stored in
+  the field's type (through a setter, in the property's type); one that does not fit throws an
+  `OverflowError` or `InexactError`, as does a float number, or a result count, that cannot hold
+  its value exactly. The first input's emitters (and,
   without renumbering, every input's) are the inputs' own objects, as in [`cat_smld`](@ref).
 - Metadata is a copy of the first input's, plus `"merged_from"` (the number of inputs),
   `"frame_adjustment"` and `"dataset_adjustment"` (the two keywords). The other inputs' metadata
@@ -186,14 +188,19 @@ function merge_smld(smlds::Vector{<:AbstractSMLD};
     metadata["frame_adjustment"] = adjust_frames
     metadata["dataset_adjustment"] = adjust_datasets
 
-    # Create the new SMLD object
-    return typeof(first(smlds))(
+    # Create the new SMLD object; a count its type cannot hold exactly (a float total) throws
+    result = typeof(first(smlds))(
         all_emitters,
         smlds[1].camera,
         new_n_frames,
         new_n_datasets,
         metadata
     )
+    result.n_frames == new_n_frames ||
+        throw(InexactError(:merge_smld, typeof(result.n_frames), new_n_frames))
+    result.n_datasets == new_n_datasets ||
+        throw(InexactError(:merge_smld, typeof(result.n_datasets), new_n_datasets))
+    return result
 end
 
 
@@ -216,96 +223,126 @@ end
 _has_own_setter(E::Type) =
     any(m -> m.module !== Base && m.module !== Core, methods(setproperty!, Tuple{E,Symbol,Any}))
 
-# A sum of two counts in Int or the counts' wider type, checked so that it cannot wrap.
+# A whole number as an integer: a float count or offset that holds one moves numbers exactly.
+_whole(x::Integer) = x
+_whole(x::AbstractFloat) = isinteger(x) ? BigInt(x) : x
+_whole(x) = x
+
+# A sum of two counts in Int or the counts' wider type, checked so that it cannot wrap; whole
+# numbers held as floats are summed as integers.
 _count_add(a::Integer, b::Integer) = Base.checked_add(promote(a, b, 0)...)
-_count_add(a, b) = a + b
+function _count_add(a, b)
+    wa, wb = _whole(a), _whole(b)
+    return wa isa Integer && wb isa Integer ? _count_add(wa, wb) : a + b
+end
 
 # An offset as an Int when it fits (so Int emitter numbers move in Int), else as it is.
 _offset(d::Integer) = d isa Int || !(typemin(Int) <= d <= typemax(Int)) ? d : Int(d)
-_offset(d) = d
+_offset(d) = (w = _whole(d); w isa Integer ? _offset(w) : w)
 
 # A number moved by `d`: an integer in Int or the wider type, checked so the sum cannot wrap; a
-# float only when the sum is exact (a float holds whole numbers exactly only up to a point).
+# float only when its own type holds the sum exactly.
 _moved(old::Integer, d::Integer) = Base.checked_add(promote(old, d)...)
 function _moved(old::AbstractFloat, d::Real)
+    if isinteger(old) && isinteger(d)
+        n = BigInt(old) + BigInt(d)
+        r = convert(typeof(old), n)
+        isfinite(r) && BigInt(r) == n || throw(InexactError(:merge_smld, typeof(old), n))
+        return r
+    end
     r = old + d
-    isfinite(r) && Rational{BigInt}(r) == Rational{BigInt}(old) + d ||
+    isfinite(r) && Rational{BigInt}(r) == Rational{BigInt}(old) + Rational{BigInt}(d) ||
         throw(InexactError(:merge_smld, typeof(r), (old, d)))
     return r
 end
 _moved(old, d) = old + d
 
+# A moved number as a field of type `FT`; a float that cannot hold it exactly throws.
+function _stored(::Type{FT}, v) where {FT}
+    r = convert(FT, v)
+    (r isa AbstractFloat || v isa AbstractFloat) && r != v &&
+        throw(InexactError(:merge_smld, FT, v))
+    return r
+end
+
 # A moved number in the type of the property it replaces, for a setter that may store it as given.
-_moved_as(old, d) = convert(typeof(old), _moved(old, d))
+_moved_as(old, d) = _stored(typeof(old), _moved(old, d))
 
 # A deep copy of `e` with its numbers set through its own setter, so the write cannot reach `e`.
-# Both numbers are read before either is set, so a setter that changes the other cannot move it
-# twice.
+# Both numbers are computed before either is set; afterwards both must read as asked, so a setter
+# that also changes the other number is refused instead of giving numbers the result does not
+# declare.
 function _renumbered_by_property(e, df, dd)
     c = deepcopy(e)
-    f = iszero(df) ? nothing : _moved_as(getproperty(c, :frame), df)
-    d = iszero(dd) ? nothing : _moved_as(getproperty(c, :dataset), dd)
-    f === nothing || setproperty!(c, :frame, f)
-    d === nothing || setproperty!(c, :dataset, d)
+    f = iszero(df) ? (hasproperty(c, :frame) ? getproperty(c, :frame) : nothing) :
+                     _moved_as(getproperty(c, :frame), df)
+    d = iszero(dd) ? (hasproperty(c, :dataset) ? getproperty(c, :dataset) : nothing) :
+                     _moved_as(getproperty(c, :dataset), dd)
+    iszero(df) || setproperty!(c, :frame, f)
+    iszero(dd) || setproperty!(c, :dataset, d)
+    (f === nothing || isequal(getproperty(c, :frame), f)) &&
+        (d === nothing || isequal(getproperty(c, :dataset), d)) ||
+        throw(ArgumentError(string(typeof(e), "'s setter changes the frame or dataset beside the ",
+            "one set, so merge_smld cannot renumber it")))
     return c
 end
 
-# A new emitter rebuilt from the fields of `e`, its frame and dataset moved by `df` and `dd`
-# from their values as properties (as `e.frame` reads them); `e` is not changed, fields that hold
-# objects are shared, and a number with a zero move is not read or written. This needs a `frame`
-# field only for a frame move and a `dataset` field only for a dataset move; for a type with
-# neither field nor property, the error is `getproperty`'s.
+# A new emitter rebuilt from the fields of `e`, its frame and dataset moved by `df` and `dd`;
+# `e` is not changed, fields that hold objects are shared, fields left unset stay unset, and a
+# number with a zero move is not read or written. A move starts from `e.frame` for a mutable
+# type and from the field for an immutable one, as in 0.1.0. This needs a `frame` field only for
+# a frame move and a `dataset` field only for a dataset move.
 @generated function _renumbered(e::E, df::Real, dd::Real) where {E<:AbstractEmitter}
     names = fieldnames(E)
+    mut = ismutabletype(E)
     # A number with no field: for a mutable type `getproperty`'s error (0.1.0 read `e.frame`),
     # for an immutable one an ArgumentError, as in 0.1.0.
     checks = Expr[]
     for (nm, d) in ((:frame, :df), (:dataset, :dd))
         nm in names && continue
-        read = ismutabletype(E) ? :(getproperty(e, $(QuoteNode(nm)))) : nothing
+        read = mut ? :(getproperty(e, $(QuoteNode(nm)))) : nothing
         push!(checks, :(iszero($d) || ($read;
             throw(ArgumentError(string($E, " has no ", $(string(nm)), " field to renumber"))))))
     end
+    from(nm) = mut ? :(getproperty(e, $(QuoteNode(nm)))) : :(getfield(e, $(QuoteNode(nm))))
+    move(nm) = nm === :frame ? :df : nm === :dataset ? :dd : nothing
     args = Any[]
     for (i, n) in enumerate(names)
         FT = fieldtype(E, i)
-        push!(args,
-            n === :frame ? :(iszero(df) ? getfield(e, :frame) : convert($FT, _moved(getproperty(e, :frame), df))) :
-            n === :dataset ? :(iszero(dd) ? getfield(e, :dataset) : convert($FT, _moved(getproperty(e, :dataset), dd))) :
-            :(getfield(e, $i)))
+        d = move(n)
+        push!(args, d === nothing ? :(getfield(e, $i)) :
+            :(iszero($d) ? getfield(e, $i) : _stored($FT, _moved($(from(n)), $d))))
     end
     body = Expr(:new, E, args...)
     objects = findall(j -> !isbitstype(fieldtype(E, j)), 1:length(names))
-    if ismutabletype(E)
-        isempty(objects) && return Expr(:block, checks..., body)
+    isempty(objects) && return Expr(:block, checks..., body)
+    lost(i) = Expr[:(iszero($(move(names[j]))) || throw(ArgumentError(string($E, ": cannot move ",
+                     $(string(names[j])), ", which this emitter leaves unset"))))
+                   for j in i:length(names) if move(names[j]) !== nothing]
+    if mut && !any(j -> isconst(E, j), 1:length(names))
         # A mutable emitter's unset fields need not be the last ones: start from an emitter with
-        # every field unset and set the ones `e` has. A `const` field cannot be set that way, so
-        # such a type is deep-copied and set instead.
-        alldefined = foldl((a, b) -> :($a && $b), (:(isdefined(e, $i)) for i in objects))
-        if any(i -> isconst(E, i), 1:length(names))
-            partial = :(_renumbered_by_property(e, df, dd))
-        else
-            unset_move(i) = names[i] in (:frame, :dataset) ?
-                :(iszero($(names[i] === :frame ? :df : :dd)) || throw(ArgumentError(string($E,
-                    ": cannot move ", $(string(names[i])), ", which this emitter leaves unset")))) :
-                nothing
-            sets = [i in objects ? :(isdefined(e, $i) ? setfield!(c, $i, $(args[i])) : $(unset_move(i))) :
-                    :(setfield!(c, $i, $(args[i]))) for i in 1:length(names)]
-            partial = Expr(:block, :(c = $(Expr(:new, E))), sets..., :c)
+        # every field unset and set the ones `e` has, and a moved number from `e.frame` even when
+        # its field is unset.
+        sets = map(1:length(names)) do i
+            d = move(names[i])
+            !(i in objects) ? :(setfield!(c, $i, $(args[i]))) :
+            d === nothing ? :(isdefined(e, $i) && setfield!(c, $i, $(args[i]))) :
+                            :((isdefined(e, $i) || !iszero($d)) && setfield!(c, $i, $(args[i])))
         end
+        alldefined = foldl((a, b) -> :($a && $b), (:(isdefined(e, $i)) for i in objects))
+        partial = Expr(:block, :(c = $(Expr(:new, E))), sets..., :c)
         return Expr(:block, checks..., :($alldefined ? $body : $partial))
     end
-    # An immutable emitter's field that is not plain bits can be left undefined only at the end
-    # (`new` with fewer arguments): rebuild with the fields `e` has defined, and throw if a
-    # requested move falls among the fields it leaves unset.
-    for i in reverse(objects)
-        lost = Expr[]
-        for (nm, d) in ((:frame, :df), (:dataset, :dd))
-            j = findfirst(==(nm), names)
-            j !== nothing && j >= i && push!(lost, :(iszero($d) || throw(ArgumentError(
-                string($E, ": cannot move ", $(string(nm)), ", which this emitter leaves unset")))))
-        end
-        body = :(isdefined(e, $i) ? $body : $(Expr(:block, lost..., Expr(:new, E, args[1:i-1]...))))
+    # Otherwise (an immutable type, or a mutable one with `const` fields, which cannot be set
+    # after `new`) rebuild with the leading fields `e` has set, `new` with fewer arguments; a
+    # mutable emitter whose unset fields are not all at the end is deep-copied and set instead.
+    for (k, i) in enumerate(reverse(objects))
+        later = objects[end-k+2:end]
+        prefix = Expr(:block, lost(i)..., Expr(:new, E, args[1:i-1]...))
+        alt = mut && !isempty(later) ?
+            :($(foldl((a, b) -> :($a || $b), (:(isdefined(e, $j)) for j in later))) ?
+              _renumbered_by_property(e, df, dd) : $prefix) : prefix
+        body = :(isdefined(e, $i) ? $body : $alt)
     end
     return Expr(:block, checks..., body)
 end
