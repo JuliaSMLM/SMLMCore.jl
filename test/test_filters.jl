@@ -970,3 +970,49 @@ _filter_gg = 2
     @test zz == 5
     @test xs(@filter(s, begin f(v::T) where {T} = v > zero(T); f(x - 1) end)) == want
 end
+
+@testset "@filter: where in a type, assignment in a block, named-tuple shorthand" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2D{Float64}(x, 1.0, 1000.0) for x in (1.0, 2.0)], cam, 1, 1)
+    xs(r) = [e.x for e in r.emitters]
+
+    # A `where` in a type is that type's own parameter
+    @test xs(@filter(s, e isa (Emitter2D{T} where T<:AbstractFloat))) == [1.0, 2.0]
+    T = Float32
+    @test xs(@filter(s, e isa (Emitter2D{T} where T<:AbstractFloat))) == [1.0, 2.0]
+
+    # A condition whose value is an assignment is refused, inside a block or `@inbounds` too
+    @test_throws ArgumentError macroexpand(@__MODULE__, :(@filter(s, begin dataset = 1 end)))
+    @test_throws ArgumentError macroexpand(@__MODULE__, :(@filter(s, @inbounds dataset = 1)))
+
+    # A bare name in a named tuple keeps its entry name
+    @test xs(@filter(s, (x, y = y).x < 2)) == [1.0]
+    @test xs(@filter(s, (; x, y = y).x < 2)) == [1.0]
+end
+
+mutable struct EllipticEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    e::Float64
+end
+@testset "@filter: where in a value, a property named e, a name only in @isdefined" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2D{Float64}(x, 1.0, 1000.0) for x in (1.0, 2.0)], cam, 1, 1)
+    xs(r) = [e.x for e in r.emitters]
+    @test xs(@filter(s, (x, y) isa (Tuple{T,T} where T))) == [1.0, 2.0]
+    T = Int
+    @test xs(@filter(s, (x, y) isa (Tuple{T,T} where T))) == [1.0, 2.0]
+
+    # a bare `e` is the emitter even when it has a property named `e`; `e.e` reads that
+    se = BasicSMLD([EllipticEmitter(1.0, 1.0, 1.0), EllipticEmitter(2.0, 1.0, 0.0)], cam, 1, 1)
+    @test xs(@filter(se, e.e == 1)) == [1.0]
+    @test xs(@filter(se, e isa EllipticEmitter && x > 1)) == [2.0]
+
+    # a name that appears only in `@isdefined` is read as any other
+    only_here = 1
+    @test xs(@filter(s, @isdefined(only_here))) == [1.0, 2.0]
+    @test isempty(@filter(s, @isdefined(not_defined_anywhere_q)).emitters)
+
+    # `let q` with no value binds `q` in its body
+    @test xs(@filter(s, let q; q = x; q > 1 end)) == [2.0]
+end

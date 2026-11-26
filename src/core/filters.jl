@@ -17,7 +17,7 @@ emitter computes without listing it in `propertynames` is still read when no var
 name is defined where `@filter` is called (names Julia exports, such as `time`, count as
 defined), and a missing one throws the error `getproperty` gives. `e` is the emitter itself, so
 `e.name` reads its property `name`, as in 0.1.0, and `f(e)` passes the emitter to `f`; write
-`\$e` for a caller variable named `e`.
+`\$e` for a caller variable named `e`, and `e.e` for an emitter property named `e`.
 
 A property is read where the condition reaches it, as in 0.1.0, so `photons > 100 && z > 0`
 never reads `z` of an emitter with 100 photons or fewer. The data set is evaluated first, then
@@ -32,13 +32,15 @@ a construct that binds `e` (`e -> ...`, a generator or loop over `e`, `let e = .
 construct's, and `catch e` or `e = ...` assigns it, as in Julia. Operators (`>`, `in`, `&&`) are
 never properties; keyword names, field names, types in `x::T` (read by Julia where the
 condition runs) and quoted code are not names. Other macros in the condition expand first. A
-free name inside a nested `@filter` follows the outer condition, the outer emitter's property
-when it has one. The condition must give `true` or `false` (or `1` or `0`) for each emitter; a
-condition written as an assignment (`dataset = 1`, for `==`) is refused with an
-`ArgumentError` when the macro expands.
+free name inside a nested `@filter` is the inner emitter's property when it has one, and
+otherwise follows the outer condition (the outer emitter's property when it has one). The
+condition must give `true` or `false` (or `1` or `0`) for each emitter; a
+condition whose value is an assignment (`dataset = 1` for `==`, alone or last in a block) is
+refused with an `ArgumentError` when the macro expands.
 
 The caller's variables are read outside the function that tests each emitter, so that function
-captures none of them. A `@filter` inside a comprehension or closure of the caller reads them
+captures none of them, except a type named in `x::T` or a `where` bound, which Julia reads as
+written. A `@filter` inside a comprehension or closure of the caller reads them
 inside that closure, which captures them as any Julia closure does: a captured local that the
 caller assigns again later is boxed, slowing the caller (`\$name` does not change this).
 
@@ -78,8 +80,9 @@ julia> length(@filter(smld, frame == \$frame))
 """
 macro filter(smld, condition)
     # `@filter(smld, dataset = 1)` is a slip for `==`; 0.1.0 wrote 1 into every emitter.
-    condition isa Expr && condition.head === :(=) && throw(ArgumentError(string("@filter: the ",
-        "condition `", condition, "` is an assignment; write `==` to compare")))
+    value = _filter_value_expr(condition)
+    value isa Expr && value.head === :(=) && throw(ArgumentError(string("@filter: the condition's ",
+        "value `", value, "` is an assignment; write `==` to compare")))
     e = gensym(:emitter)
     # `$expr` is the caller's value: bound once, where @filter is called, outside every name the
     # condition binds; a nested @filter's own `$` stay its own.
@@ -119,6 +122,26 @@ macro filter(smld, condition)
     isempty(outer) || (call = Expr(:let, Expr(:block, outer...), call))
     return esc(Expr(:let, Expr(:(=), s, smld), call))
 end
+
+# The expression whose value the condition gives: the last of a block, the body of `@inbounds`.
+function _filter_value_expr(ex)
+    while ex isa Expr
+        if ex.head === :block
+            i = findlast(a -> !(a isa LineNumberNode), ex.args)
+            i === nothing && return ex
+            ex = ex.args[i]
+        elseif ex.head === :macrocall && _macro_name(ex.args[1]) === Symbol("@inbounds")
+            ex = ex.args[end]
+        else
+            return ex
+        end
+    end
+    return ex
+end
+_macro_name(m::Symbol) = m
+_macro_name(m::GlobalRef) = m.name
+_macro_name(m::Expr) = m.head === :. && m.args[end] isa QuoteNode ? m.args[end].value : nothing
+_macro_name(m) = nothing
 
 # A caller name that is not defined where @filter is called.
 struct _FilterUndefined end
@@ -173,8 +196,7 @@ function _filter_targets(ex::Expr)
     if ex.head in (:tuple, :parameters, :block)
         return reduce(vcat, (_filter_targets(a) for a in ex.args); init = Symbol[])
     elseif ex.head === :where  # `f(x::T) where {T<:Real}` binds `T` too
-        params = (t isa Expr && t.head in (:<:, :>:) ? t.args[1] : t for t in ex.args[2:end])
-        return vcat(_filter_targets(ex.args[1]), Symbol[t for t in params if t isa Symbol])
+        return vcat(_filter_targets(ex.args[1]), _filter_where_params(ex))
     elseif ex.head in (:kw, :..., :(=), :outer) || (ex.head === :(::) && length(ex.args) == 2)
         return _filter_targets(ex.args[1])
     elseif ex.head === :meta
@@ -186,20 +208,22 @@ function _filter_targets(ex::Expr)
 end
 _filter_targets(_) = Symbol[]
 
-# The names a scope construct binds for its body: arguments, loop and `let` variables, the
-# `catch` variable.
+# The parameters a `where` binds: `T` in `V{T} where T` and `f(x::T) where {T<:Real}`.
+_filter_where_params(ex::Expr) =
+    Symbol[p for p in (t isa Expr && t.head in (:<:, :>:) ? t.args[1] : t for t in ex.args[2:end])
+           if p isa Symbol]
+
+# The names a construct binds for its body that no assignment shows: the arguments of
+# `x -> ...`, the `catch` variable, a `let` variable given no value (`_filter_names!` finds the
+# targets of `=`, which covers loop, generator and other `let` variables and function definitions).
 function _filter_scope_names(ex::Expr)
     h, args = ex.head, ex.args
     h === :-> && return _filter_targets(args[1])
-    (h === :function || (h === :(=) && args[1] isa Expr && args[1].head in (:call, :where))) &&
-        return _filter_targets(args[1])
-    if h === :for || h === :let
-        specs = args[1] isa Expr && args[1].head === :block ? args[1].args : Any[args[1]]
-        return reduce(vcat, (_filter_targets(s) for s in specs); init = Symbol[])
-    end
-    h in (:generator, :filter) &&
-        return reduce(vcat, (_filter_targets(s) for s in args[2:end]); init = Symbol[])
     h === :try && args[2] isa Symbol && return Symbol[args[2]]
+    if h === :let
+        specs = args[1] isa Expr && args[1].head === :block ? args[1].args : Any[args[1]]
+        return Symbol[s for s in specs if s isa Symbol]
+    end
     return Symbol[]
 end
 
@@ -221,7 +245,8 @@ function _filter_names!(names, binders, ex)
     elseif h === :. && length(args) == 2 && args[2] isa QuoteNode
         _filter_names!(names, binders, args[1])
     elseif h === :(::) || h === :where
-        # the type is not a name of the condition
+        # the type is not a name of the condition; a `where` binds its parameters
+        h === :where && union!(binders, _filter_where_params(ex))
         (h === :where || length(args) == 2) && _filter_names!(names, binders, args[1])
     elseif h === :tuple
         for a in args
@@ -254,7 +279,6 @@ function _filter_reads(ex, e::Symbol, free::Set{Symbol}, caller)
     rw(a) = _filter_reads(a, e, free, caller)
     if h === :isdefined
         n = args[1]
-        n === :e && n in free && return true
         return n isa Symbol && n in free ?
             :($(GlobalRef(Base, :hasproperty))($e, $(QuoteNode(n))) ||
               $(caller[n]) !== $(GlobalRef(@__MODULE__, :_FILTER_UNDEFINED))) : ex
@@ -267,8 +291,12 @@ function _filter_reads(ex, e::Symbol, free::Set{Symbol}, caller)
     elseif h === :where
         return Expr(:where, rw(args[1]), args[2:end]...)
     elseif h === :tuple
-        return Expr(:tuple, (a isa Expr && a.head in (:(=), :kw) && a.args[1] isa Symbol ?
-                             Expr(a.head, a.args[1], rw(a.args[2])) : rw(a) for a in args)...)
+        entry(a) = a isa Expr && a.head in (:(=), :kw) && a.args[1] isa Symbol
+        # in a named tuple, a bare name is the entry's name too: `(x, y = 1)` is `(x = x, y = 1)`
+        named = any(entry, args)
+        return Expr(:tuple, (entry(a) ? Expr(a.head, a.args[1], rw(a.args[2])) :
+                             named && a isa Symbol && a in free ? Expr(:(=), a, rw(a)) : rw(a)
+                             for a in args)...)
     elseif h === :parameters
         # `f(x; lo)` is `f(x; lo = lo)`: keep the keyword's name
         return Expr(:parameters, (a isa Symbol && a in free ? Expr(:kw, a, rw(a)) : rw(a)
