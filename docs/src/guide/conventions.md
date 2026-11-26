@@ -49,7 +49,7 @@ Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
   Constructors do not check this; `physical_to_pixel*` and the
   uniform-pixel formulas assume it, and the cameras' displays assume uniform pixels (they report
   the first pixel's width).
-- With uniform pixels of `Δx` × `Δy`, pixel `(col, row)` covers
+- With uniform pixels of `Δx` × `Δy`, pixel `(col, row)` of a whole sensor covers
   `[(col - 1)·Δx, col·Δx) × [(row - 1)·Δy, row·Δy)` µm and its center is at
   `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm. In pixel coordinates the center of pixel `(col, row)`
   is `(col, row)`, and the camera's corner is `(0.5, 0.5)`.

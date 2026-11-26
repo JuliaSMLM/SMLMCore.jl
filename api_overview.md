@@ -142,8 +142,8 @@ mutable struct Emitter3DFit{T} <: AbstractEmitter
 end
 
 struct IdealCamera{T} <: AbstractCamera
-    pixel_edges_x::Vector{T}   # µm, from 0, one more than the number of pixels
-    pixel_edges_y::Vector{T}   # µm, from 0, one more than the number of pixels
+    pixel_edges_x::Vector{T}   # µm, from 0 (a crop: from its corner); N + 1 for N pixels
+    pixel_edges_y::Vector{T}   # µm, likewise
 end
 
 struct SCMOSCamera{T<:Real} <: AbstractCamera
@@ -341,11 +341,12 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclu
   `$name` reads the variable and `$f(x)` calls the caller's `f`, each `$expr` evaluated once
   where `@filter` is called. A name that is neither is read with `getproperty`, which reads a
   property the emitter computes without listing it and otherwise throws its error. `e.name`
-  reads the emitter's property. Operators are never properties. Names the condition binds keep
-  their own values by Julia's scope rules (arguments, loop, generator and `let` variables,
-  `catch` variables, names it assigns or declares `local`), and its assignments never reach the
-  caller's variables. Other macros expand first (a nested `@filter` works); keyword names and
-  quoted code stay as written. The condition gives `true` or `false` (or `1` or `0`).
+  reads the emitter's property. Operators are never properties. Each name is bound this way
+  before the condition runs, and the condition runs as written, so Julia's own scope rules
+  decide what names it binds itself mean, and its assignments never reach the caller's
+  variables. Other macros expand first; in a nested `@filter`, a free name follows the outer
+  condition. Keyword names, field names and quoted code are not names. The condition gives
+  `true` or `false` (or `1` or `0`).
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
@@ -394,8 +395,10 @@ by_dataset = merge_smld([smld_a, smld_b]; adjust_datasets = true)
   needs a `frame` (or `dataset`) property; `Emitter2D` and `Emitter3D` have neither. The inputs
   are never modified. A renumbered emitter is rebuilt from the input's fields, so its object
   fields stay shared with the input; a type with its own `setproperty!` is deep-copied and set
-  through it, both numbers computed first. Moves start from `e.frame` and `e.dataset`. Sums and
-  moved numbers are checked: one that does not fit throws, never wraps.
+  through it, both numbers computed first (a setter that changes the other number throws). A
+  move starts from `e.frame` and `e.dataset` for a mutable type and from the fields for an
+  immutable one, as in 0.1.0. Sums, moved numbers and result counts are checked: one that does
+  not fit throws, never wraps or rounds.
 - Metadata is a copy of the first input's, plus `"concatenated_from"` (`cat_smld`) or
   `"merged_from"`, `"frame_adjustment"` and `"dataset_adjustment"` (`merge_smld`). The other
   inputs' metadata are dropped.
