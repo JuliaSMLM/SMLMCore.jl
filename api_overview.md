@@ -312,8 +312,8 @@ edges_x, edges_y = compute_bin_edges(1:512, 1:512, 0.1)    # pixel edges, µm, f
   `n` covers `[(n - 1)·pixel_size, n·pixel_size)`, up to floating-point rounding (a position
   computed as `(n - 1) * pixel_size` can fall in pixel `n - 1`). It does not check bounds.
 - `pixel_to_physical` returns `pixel_size`'s type, so `pixel_size` must be a float.
-  `physical_to_pixel` keeps a floating-point input's type (Float32 stays Float32), and gives
-  Float64 for `Rational` inputs.
+  `physical_to_pixel` keeps the type of `x / pixel_size` (Float32 stays Float32), and gives the
+  nearest Float64 when a `Rational` meets a `Rational` or an integer.
 
 ### Filtering Operations
 
@@ -335,17 +335,23 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclu
 ```
 
 - In `@filter`, a name in the condition is an emitter property when the emitter has one of that
-  name, and otherwise the variable or function of that name where `@filter` is called. A name
-  that is both reads the property; `$name` reads the variable. A name that is neither throws an
-  `UndefVarError` when the condition runs.
+  name (`hasproperty`), and otherwise the variable or function of that name where `@filter` is
+  called; called functions follow the same rule. A name that is both reads the property;
+  `$name` reads the variable and `$f(x)` calls the caller's `f`. A name that is neither is read
+  with `getproperty`, which reads a property the emitter computes without listing it and
+  otherwise throws its error. `e.name` reads the emitter's property. Operators are never
+  properties; names the condition binds (`x -> ...`, generators, `let`, assignments) keep their
+  own values; macros, keyword names and quoted code stay as written. The condition gives `true`
+  or `false` (or `1` or `0`).
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
   `Emitter3D` throw an error that names the missing field.
 - `filter_roi` bounds are inclusive. A range's smallest and largest elements are the bounds, so
   `0.0:0.3:1.0` stops at 0.9; pass tuples. Any range other than whole numbers in steps of 1
-  (`0:2`) logs a warning once per Julia session, since a range that lost its stop cannot be told
-  from one written to stop there. The 2D form needs 2D emitters and the 3D form 3D emitters.
+  (`0:2`, `0:1:2`) logs a warning once per logger (once per Julia session with the default
+  logger), since a range that lost its stop cannot be told from one written to stop there. The
+  2D form needs 2D emitters and the 3D form 3D emitters.
 
 ```julia
 # Spatial dimension: what the type declares (SMLMCore's emitter types declare 2 or 3), else 3
@@ -383,7 +389,9 @@ by_dataset = merge_smld([smld_a, smld_b]; adjust_datasets = true)
   calibration included) and the same emitter type.
 - Renumbering moves each input by the earlier inputs' total `n_frames` (or `n_datasets`), and
   needs a `frame` (or `dataset`) property; `Emitter2D` and `Emitter3D` have neither. The inputs
-  are never modified.
+  are never modified. A renumbered emitter is rebuilt from the input's fields, so its object
+  fields stay shared with the input; a type with its own `setproperty!` is deep-copied and set
+  through it. Sums and moved numbers are checked: one that does not fit throws, never wraps.
 - Metadata is a copy of the first input's, plus `"concatenated_from"` (`cat_smld`) or
   `"merged_from"`, `"frame_adjustment"` and `"dataset_adjustment"` (`merge_smld`). The other
   inputs' metadata are dropped.

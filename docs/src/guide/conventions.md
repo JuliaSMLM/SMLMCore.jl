@@ -60,6 +60,13 @@ Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
   the edges starting at 0. For rectangular pixels or a camera with its own edges, use
   [`get_pixel_centers`](@ref) and the camera's edges. None of them checks that a position lies
   inside the camera.
+- A camera of a crop of the sensor is built from the crop's own edges, which start at the crop's
+  corner in sensor µm: `IdealCamera(collect(7.68:0.12:15.36), collect(0.0:0.12:15.36))` for
+  columns 65 to 128 and rows 1 to 128 of a sensor with 0.12 µm pixels. Positions are then in
+  sensor µm, and `physical_to_pixel*` give sensor pixel numbers (column 65 for the crop's first
+  column). For numbers within the crop, from `(1, 1)`, subtract the crop's first edges from the
+  position first. A pixel range (`65:128`) is refused, since a range always means a whole
+  sensor, from 0 µm.
 
 ## Array order
 
