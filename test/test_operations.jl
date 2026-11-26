@@ -739,3 +739,91 @@ Base.propertynames(::StoredFrameImmutable) = (:store, :dataset, :frame)
     @test [e.frame for e in m.emitters] == [1, 7]
     @test b.emitters[1].frame == 2
 end
+
+# A frame read through a getter that differs from the stored field; float frames; a setter that
+# moves the dataset with the frame; a cache field left unset; a frame field of abstract type
+mutable struct SentinelFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Int              # 0: the frame is source_frame
+    source_frame::Int
+    dataset::Int
+end
+Base.getproperty(e::SentinelFrameEmitter, s::Symbol) =
+    s === :frame && getfield(e, :frame) == 0 ? getfield(e, :source_frame) : getfield(e, s)
+mutable struct FloatFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Float32
+    dataset::Int
+end
+mutable struct AcquisitionEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int            # one acquisition per 10 frames, kept in step by the setter
+end
+function Base.setproperty!(e::AcquisitionEmitter, s::Symbol, v)
+    s === :frame && setfield!(e, :dataset,
+        getfield(e, :dataset) + fld(v - 1, 10) - fld(getfield(e, :frame) - 1, 10))
+    return setfield!(e, s, convert(Int, v))
+end
+mutable struct CachedModelEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+    model::Vector{Float64}
+    cache::Vector{Float64}
+    CachedModelEmitter(f, d, m) = new(f, d, m)
+end
+mutable struct AbstractFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Integer
+    dataset::Int
+end
+
+@testset "merge_smld moves each number once, from its public value" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf, nd = 1) = BasicSMLD(v, cam, nf, nd, Dict{String,Any}())
+
+    # The moved frame starts from e.frame, as in 0.1.0, not from the stored field
+    m = merge_smld(sm([SentinelFrameEmitter(1, 0, 1)], 10), sm([SentinelFrameEmitter(0, 7, 1)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame == 17
+
+    # A float frame moves only when it holds the result exactly
+    m = merge_smld(sm([FloatFrameEmitter(1f0, 1)], 10), sm([FloatFrameEmitter(3f0, 1)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame === 13f0
+    @test_throws InexactError merge_smld(sm([FloatFrameEmitter(2f0^24, 1)], 2^24),
+                                         sm([FloatFrameEmitter(1f0, 1)], 1); adjust_frames = true)
+
+    # Both numbers are computed before a setter that changes the other runs
+    m = merge_smld(sm([AcquisitionEmitter(1, 1)], 10, 1), sm([AcquisitionEmitter(1, 2)], 10, 2);
+                   adjust_frames = true, adjust_datasets = true)
+    @test (m.emitters[2].frame, m.emitters[2].dataset) == (11, 3)
+
+    # A cache left unset stays unset, and the shared model is not copied
+    model = zeros(10^6)
+    mk(f) = sm([CachedModelEmitter(f, 1, model) for _ in 1:5], 10)
+    a, b = mk(1), mk(2)
+    merge_smld(a, b; adjust_frames = true)
+    @test @allocated(merge_smld(a, b; adjust_frames = true)) < 10^6
+    m = merge_smld(a, b; adjust_frames = true)
+    @test all(e -> e.model === model && !isdefined(e, :cache), m.emitters)
+    @test [e.frame for e in m.emitters] == [fill(1, 5); fill(12, 5)]
+
+    # A field of abstract type takes the moved value as it is, as in 0.1.0
+    m = merge_smld(sm([AbstractFrameEmitter(UInt8(1), 1)], 10), sm([AbstractFrameEmitter(UInt8(250), 1)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame == 260
+
+    # A moved number that overflows throws, though the counts' sum fits
+    fe(f) = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+    @test_throws OverflowError merge_smld(sm([fe(1)], 10), sm([fe(typemax(Int) - 5)], 10);
+                                          adjust_frames = true)
+    # A sum of counts that overflows throws, though no emitter moves
+    empty_s(nf) = BasicSMLD(Emitter2DFit{Float64}[], cam, nf, 1, Dict{String,Any}())
+    @test_throws OverflowError merge_smld(empty_s(typemax(Int)), empty_s(1); adjust_frames = true)
+
+    # A mutable type with no frame throws getproperty's error, as in 0.1.0
+    e2 = BasicSMLD([Emitter2D{Float64}(1.0, 1.0, 1000.0)], cam, 1, 1)
+    err = try
+        merge_smld(e2, e2; adjust_frames = true); nothing
+    catch ex
+        ex
+    end
+    @test err isa Exception && !(err isa ArgumentError) && occursin("frame", sprint(showerror, err))
+end
