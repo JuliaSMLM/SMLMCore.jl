@@ -104,12 +104,14 @@ the missing field (a `FieldError` from Julia 1.12, an `ErrorException` before).
 - The inputs are never modified. Each renumbered emitter is a new object, one per entry, even
   when an input lists the same emitter object more than once. Only the requested numbers are
   read and changed, so an emitter type with a `frame` field and no `dataset` field can be
-  renumbered by frame, and immutable emitter types can be renumbered. A renumbered mutable
-  emitter shares nothing with the input emitter: one whose fields are all plain data is copied
-  field by field, and any other is deep-copied, so setting its number (through the type's own
-  setter, or a property kept in an array) cannot reach the input. The first
-  input's emitters (and, without renumbering, every input's) are the inputs' own objects, as in
-  [`cat_smld`](@ref).
+  renumbered by frame, and immutable emitter types can be renumbered. A renumbered emitter is
+  rebuilt from the input's fields with the moved numbers, so fields that hold arrays or other
+  objects stay shared with the input emitter, as `cat_smld` shares whole emitters. A type with
+  its own `setproperty!` (a frame kept in an array, say, or a setter that keeps another field in
+  step) is deep-copied instead and set through its setter, so the write cannot reach the input.
+  A moved number keeps the type of the number it moves, and one that does not fit throws an
+  `OverflowError` or `InexactError`. The first input's emitters (and, without renumbering, every
+  input's) are the inputs' own objects, as in [`cat_smld`](@ref).
 - Metadata is a copy of the first input's, plus `"merged_from"` (the number of inputs),
   `"frame_adjustment"` and `"dataset_adjustment"` (the two keywords). The other inputs' metadata
   are dropped.
@@ -155,17 +157,20 @@ function merge_smld(smlds::Vector{<:AbstractSMLD};
     renumber = adjust_frames || adjust_datasets
     all_emitters = copy(smlds[1].emitters)
     sizehint!(all_emitters, sum(smld -> length(smld.emitters), smlds))
+    # Running totals, summed only when they are used: in Int or the counts' wider type, checked,
+    # so a sum never wraps.
     frame_offset = smlds[1].n_frames
     dataset_offset = smlds[1].n_datasets
     for smld in smlds[2:end]
         if renumber
             _append_renumbered!(all_emitters, smld.emitters,
-                adjust_frames ? frame_offset : 0, adjust_datasets ? dataset_offset : 0)
+                adjust_frames ? _offset(frame_offset) : 0,
+                adjust_datasets ? _offset(dataset_offset) : 0)
         else
             append!(all_emitters, smld.emitters)
         end
-        frame_offset += smld.n_frames
-        dataset_offset += smld.n_datasets
+        adjust_frames && (frame_offset = _count_add(frame_offset, smld.n_frames))
+        adjust_datasets && (dataset_offset = _count_add(dataset_offset, smld.n_datasets))
     end
 
     new_n_frames = adjust_frames ? frame_offset : maximum(smld.n_frames for smld in smlds)
@@ -193,27 +198,47 @@ end
 merge_smld(smlds::AbstractSMLD...; kwargs...) = merge_smld(collect(smlds); kwargs...)
 
 # Function barrier: `emitters` has a concrete type here even when the input vector does not.
+# Whether a type has its own setter is looked up once per type.
 function _append_renumbered!(dest, emitters, df::Real, dd::Real)
+    own_setter = IdDict{Type,Bool}()
     for e in emitters
-        push!(dest, _renumbered(e, df, dd))
+        T = typeof(e)
+        own = get!(() -> _has_own_setter(T), own_setter, T)
+        push!(dest, own ? _renumbered_by_property(e, df, dd) : _renumbered(e, df, dd))
     end
     return dest
 end
 
-# A new emitter equal to `e` except that its frame and dataset are moved by `df` and `dd`; `e` is
-# not changed, and a number with a zero move is not read or written. A mutable emitter is copied
-# (see `_field_copy`) and set through `setproperty!` (so a type's own setter, and frame or dataset
-# held as properties, work as before). An immutable emitter is rebuilt from its fields, which needs a
-# `frame` field only for a frame move and a `dataset` field only for a dataset move.
+# Whether `E` has a `setproperty!` method of its own, not Base's field setter.
+_has_own_setter(E::Type) =
+    any(m -> m.module !== Base && m.module !== Core, methods(setproperty!, Tuple{E,Symbol,Any}))
+
+# A sum of two counts in Int or the counts' wider type, checked so that it cannot wrap.
+_count_add(a::Integer, b::Integer) = Base.checked_add(promote(a, b, 0)...)
+_count_add(a, b) = a + b
+
+# An offset as an Int when it fits (so Int emitter numbers move in Int), else as it is.
+_offset(d::Integer) = d isa Int || !(typemin(Int) <= d <= typemax(Int)) ? d : Int(d)
+_offset(d) = d
+
+# A number moved by `d`, in the number's own type: a sum that does not fit throws.
+_moved(old::Integer, d::Integer) = oftype(old, Base.checked_add(promote(old, d)...))
+_moved(old, d) = old + d
+
+# A deep copy of `e` with its numbers set through its own setter, so the write cannot reach `e`.
+function _renumbered_by_property(e, df, dd)
+    c = deepcopy(e)
+    iszero(df) || setproperty!(c, :frame, _moved(getproperty(c, :frame), df))
+    iszero(dd) || setproperty!(c, :dataset, _moved(getproperty(c, :dataset), dd))
+    return c
+end
+
+# A new emitter rebuilt from the fields of `e`, its frame and dataset moved by `df` and `dd`;
+# `e` is not changed, fields that hold objects are shared, and a number with a zero move is not
+# read or written. This needs a `frame` field only for a frame move and a `dataset` field only for
+# a dataset move. A mutable emitter with an object field left unset goes through
+# `_renumbered_by_property` instead.
 @generated function _renumbered(e::E, df::Real, dd::Real) where {E<:AbstractEmitter}
-    if ismutabletype(E)
-        return quote
-            c = _field_copy(e)
-            iszero(df) || (c.frame += df)
-            iszero(dd) || (c.dataset += dd)
-            c
-        end
-    end
     names = fieldnames(E)
     checks = Expr[]
     :frame in names || push!(checks,
@@ -224,15 +249,23 @@ end
     for (i, n) in enumerate(names)
         FT = fieldtype(E, i)
         push!(args,
-            n === :frame ? :(iszero(df) ? getfield(e, :frame) : convert($FT, getfield(e, :frame) + df)) :
-            n === :dataset ? :(iszero(dd) ? getfield(e, :dataset) : convert($FT, getfield(e, :dataset) + dd)) :
+            n === :frame ? :(iszero(df) ? getfield(e, :frame) : convert($FT, _moved(getfield(e, :frame), df))) :
+            n === :dataset ? :(iszero(dd) ? getfield(e, :dataset) : convert($FT, _moved(getfield(e, :dataset), dd))) :
             :(getfield(e, $i)))
     end
-    # A field that is not plain bits can be left undefined only at the end (`new` with fewer
-    # arguments): rebuild with the fields `e` has defined, and throw if a requested move falls
-    # among the fields it leaves unset.
     body = Expr(:new, E, args...)
-    for i in reverse(findall(j -> !isbitstype(fieldtype(E, j)), 1:length(names)))
+    objects = findall(j -> !isbitstype(fieldtype(E, j)), 1:length(names))
+    if ismutabletype(E)
+        # A mutable emitter's unset fields need not be the last ones, so one with any unset is
+        # deep-copied and set instead.
+        isempty(objects) && return Expr(:block, checks..., body)
+        alldefined = foldl((a, b) -> :($a && $b), (:(isdefined(e, $i)) for i in objects))
+        return Expr(:block, checks..., :($alldefined ? $body : _renumbered_by_property(e, df, dd)))
+    end
+    # An immutable emitter's field that is not plain bits can be left undefined only at the end
+    # (`new` with fewer arguments): rebuild with the fields `e` has defined, and throw if a
+    # requested move falls among the fields it leaves unset.
+    for i in reverse(objects)
         lost = Expr[]
         for (nm, d) in ((:frame, :df), (:dataset, :dd))
             j = findfirst(==(nm), names)
@@ -242,16 +275,6 @@ end
         body = :(isdefined(e, $i) ? $body : $(Expr(:block, lost..., Expr(:new, E, args[1:i-1]...))))
     end
     return Expr(:block, checks..., body)
-end
-
-# A copy of a mutable struct that shares nothing with it: field by field when every field is
-# plain data, and a `deepcopy` otherwise. A field that holds an object (a vector that a property
-# reads and writes, say) would be shared by a field-by-field copy, so a write through the copy's
-# setter would change the original.
-@generated function _field_copy(e::E) where {E}
-    n = fieldcount(E)
-    all(i -> isbitstype(fieldtype(E, i)), 1:n) || return :(deepcopy(e))
-    return Expr(:new, E, Any[:(getfield(e, $i)) for i in 1:n]...)
 end
 
 # Two cameras are the same when they have the same type and the same value in every field: pixel

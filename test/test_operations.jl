@@ -502,14 +502,24 @@ end
             end
 
             @testset "Mutable emitter with an object field, defined or not" begin
-                # deep-copied, so the renumbered emitter shares nothing with the input
+                # rebuilt from its fields, so the object stays shared, as in 0.1.0; unset stays unset
                 m = merge_smld(sm([ExtraTestEmitter(1, 1)], 10), sm([ExtraTestEmitter(2, 1)], 10); adjust_frames=true)
                 @test m.emitters[2].frame == 12 && !isdefined(m.emitters[2], :extra)
                 v = [1.0]
                 in2 = ExtraTestEmitter(2, 1, v)
                 m = merge_smld(sm([ExtraTestEmitter(1, 1, [0.0])], 10), sm([in2], 10); adjust_frames=true)
-                @test m.emitters[2].frame == 12 && m.emitters[2].extra == v && in2.frame == 2
-                @test m.emitters[2].extra !== v && in2.extra === v
+                @test m.emitters[2].frame == 12 && m.emitters[2].extra === v && in2.frame == 2
+                @test m.emitters[2] !== in2
+            end
+
+            @testset "Objects shared by many emitters are not copied" begin
+                # 50 emitters holding one 8 MB array: a deep copy each would allocate 400 MB
+                big_v = zeros(10^6)
+                mkx(f) = sm([ExtraTestEmitter(f, 1, big_v) for _ in 1:50], 10)
+                a, b = mkx(1), mkx(2)
+                merge_smld(a, b; adjust_frames=true)
+                @test @allocated(merge_smld(a, b; adjust_frames=true)) < 10^6
+                @test all(e -> e.extra === big_v, merge_smld(a, b; adjust_frames=true).emitters)
             end
 
             @testset "Input vector of abstract element type" begin
@@ -664,4 +674,68 @@ Base.setproperty!(e::StoredFrameEmitter, s::Symbol, v) =
     @test [x.frame for x in m.emitters] == [1, 2, 3, 4]
     @test [x.frame for x in c.emitters] == [1, 2]
     @test [x.frame for x in a.emitters] == [1, 2]
+end
+
+# Counts of any integer type in one SMLD type; emitters numbered in BigInt; a setter that stores
+# without converting; an immutable emitter whose frame is a property held in a vector
+struct AnyCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Integer
+    n_datasets::Integer
+    metadata::Dict{String,Any}
+end
+mutable struct BigNumberEmitter <: SMLMCore.AbstractEmitter
+    frame::BigInt
+    dataset::BigInt
+end
+mutable struct ForwardSetterEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+end
+Base.setproperty!(e::ForwardSetterEmitter, s::Symbol, v) = setfield!(e, s, v)
+struct StoredFrameImmutable <: SMLMCore.AbstractEmitter
+    store::Vector{Int}
+    dataset::Int
+end
+Base.getproperty(e::StoredFrameImmutable, s::Symbol) =
+    s === :frame ? getfield(e, :store)[1] : getfield(e, s)
+Base.setproperty!(e::StoredFrameImmutable, s::Symbol, v) =
+    s === :frame ? (getfield(e, :store)[1] = v) : setfield!(e, s, v)
+Base.propertynames(::StoredFrameImmutable) = (:store, :dataset, :frame)
+
+@testset "merge_smld offsets never wrap, and moved numbers keep their type" begin
+    cam = IdealCamera(64, 64, 0.1)
+    fe(f) = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+    any_s(f, nf) = AnyCountSMLD([fe(f)], cam, nf, 1, Dict{String,Any}())
+
+    # Counts of different widths: the sum is taken in Int or wider, never in UInt8
+    m = merge_smld(any_s(1, UInt8(200)), any_s(1, UInt8(100)), any_s(1, big(1)); adjust_frames = true)
+    @test [e.frame for e in m.emitters] == [1, 201, 301] && m.n_frames == 301
+
+    # A sum or a moved number that does not fit throws instead of wrapping
+    @test_throws OverflowError merge_smld(any_s(1, typemax(Int)), any_s(1, 1), any_s(1, 1);
+                                          adjust_frames = true)
+    @test_throws OverflowError merge_smld(any_s(1, typemax(Int)), any_s(typemax(Int), 1);
+                                          adjust_frames = true)
+    c32(f, n) = CountTestSMLD([fe(f)], cam, Int32(n), Int32(1), Dict{String,Any}())
+    @test_throws InexactError merge_smld(c32(1, typemax(Int32)), c32(1, 10); adjust_frames = true)
+
+    # A wide offset moves wide numbers: the second input's dataset is 2^64 + 1
+    bn(d) = AnyCountSMLD([BigNumberEmitter(1, d)], cam, 1, big(2)^64, Dict{String,Any}())
+    m = merge_smld(bn(1), bn(1); adjust_datasets = true)
+    @test [e.dataset for e in m.emitters] == [1, big(2)^64 + 1]
+    @test m.n_datasets == big(2)^65
+
+    # A setter that stores without converting gets the number in its own type
+    fs(f) = CountTestSMLD([ForwardSetterEmitter(f, 1)], cam, UInt(1), UInt(1), Dict{String,Any}())
+    m = merge_smld(fs(1), fs(1); adjust_frames = true, adjust_datasets = true)
+    @test [(e.frame, e.dataset) for e in m.emitters] == [(1, 1), (2, 2)]
+
+    # An immutable emitter with its own setter is copied and set through it; the input is unchanged
+    im(f) = BasicSMLD([StoredFrameImmutable([f], 1)], cam, 5, 1, Dict{String,Any}())
+    a, b = im(1), im(2)
+    m = merge_smld(a, b; adjust_frames = true)
+    @test [e.frame for e in m.emitters] == [1, 7]
+    @test b.emitters[1].frame == 2
 end
