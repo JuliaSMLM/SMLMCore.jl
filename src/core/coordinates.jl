@@ -36,11 +36,11 @@ square pixels of `pixel_size` µm at the sample with the camera's edges starting
 `px` is the column and `py` the row, 1-based, and `(1, 1)` is the center of the top-left pixel,
 so `px = x / pixel_size + 0.5`; the camera's corner, `(0, 0)` µm, is at `(0.5, 0.5)`. Each
 coordinate is computed on its own. It has the type of `x / pixel_size` and is computed as
-`x / pixel_size + 0.5` in that type, as in 0.1.0 (Float32 inputs give Float32, integers alone
-Float64), except when the position or the pixel size is a `Rational` and the other is a
-`Rational` or an integer: then it is a `Float64`, as in SMLMData 0.7.1, the `Float64` nearest
-the exact value, rounded once (0.7.1 rounded twice), and `Inf` or `-Inf` for a `Rational`
-infinity. For the integer index of the pixel that holds a position, use
+`x / pixel_size + 0.5` in that type, as in 0.1.0 (Float32 inputs give Float32, `Int` inputs
+Float64, a `BigInt` BigFloat), except when the position or the pixel size is a `Rational` and
+the other is a `Rational` or an integer: then it is a `Float64`, as in SMLMData 0.7.1, the
+`Float64` nearest the exact value, rounded once (0.7.1 rounded twice), and `Inf` or `-Inf` for
+a `Rational` infinity. For the integer index of the pixel that holds a position, use
 [`physical_to_pixel_index`](@ref).
 
 # Example

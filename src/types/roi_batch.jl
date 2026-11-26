@@ -66,8 +66,9 @@ ROIs to fitters (SMLMBoxer to GaussMLE, for example).
 
 ROI pixel `data[row, col, k]` is camera pixel
 `(x, y) = (x_corners[k] + col - 1, y_corners[k] + row - 1)`. For uniform pixels of size
-`Δx` × `Δy` (µm) its center is at `((x_corners[k] + col - 1.5)·Δx, (y_corners[k] + row - 1.5)·Δy)`
-µm; see [ROIs](@ref).
+`Δx` × `Δy` (µm) its center is at
+`(x0 + (x_corners[k] + col - 1.5)·Δx, y0 + (y_corners[k] + row - 1.5)·Δy)` µm, where `(x0, y0)`
+are the camera's first pixel edges (0 for a whole sensor); see [ROIs](@ref).
 
 # Constructors
 - `ROIBatch(data, x_corners, y_corners, frame_indices, camera)`: the corner and frame vectors

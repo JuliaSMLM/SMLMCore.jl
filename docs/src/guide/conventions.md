@@ -88,7 +88,8 @@ in Julia:
   `corner` in a [`SingleROI`](@ref), `x_corners[k]` and `y_corners[k]` in an [`ROIBatch`](@ref).
 - Inside the ROI, `[1, 1]` is the top-left pixel. ROI pixel `data[row, col, k]` is camera pixel
   `(x, y) = (x_corners[k] + col - 1, y_corners[k] + row - 1)`. For uniform pixels of `Δx` × `Δy`
-  its center is at `((x_corners[k] + col - 1.5)·Δx, (y_corners[k] + row - 1.5)·Δy)` µm.
+  its center is at `(x0 + (x_corners[k] + col - 1.5)·Δx, y0 + (y_corners[k] + row - 1.5)·Δy)`
+  µm, where `(x0, y0)` are the camera's first pixel edges (0 for a whole sensor).
 - ROI data are in the camera's raw units: ADU for an [`SCMOSCamera`](@ref), which a fitter
   converts to electrons with the `offset` and `gain` of the camera pixels under the ROI. That
   conversion relies on the map order above and on the corner convention.

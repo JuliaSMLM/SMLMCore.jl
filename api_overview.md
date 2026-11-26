@@ -342,14 +342,16 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclu
   called; called functions follow the same rule. A name that is both reads the property;
   `$name` reads the variable and `$f(x)` calls the caller's `f`, each `$expr` evaluated once
   where `@filter` is called. A name that is neither is read with `getproperty`, which reads a
-  property the emitter computes without listing it and otherwise throws its error. `e.name`
-  reads the emitter's property. Operators are never properties. A property is read where the
-  condition reaches it, as in 0.1.0 (`photons > 100 && z > 0` stops before `z`); a caller
-  variable is read once, where `@filter` is called. Names the condition binds itself keep
-  Julia's own scope rules, each starting as the property or caller variable of that name, and
-  its assignments never reach the caller's variables. Other macros expand first; in a nested
-  `@filter`, a free name follows the outer condition. Keyword names, field names, types in
-  `x::T` and quoted code are not names. The condition gives `true` or `false` (or `1` or `0`).
+  property the emitter computes without listing it and otherwise throws its error. `e` is the
+  emitter itself (`e.name`, `f(e)`). Operators are never properties. A property is read where
+  the condition reaches it, as in 0.1.0 (`photons > 100 && z > 0` stops before `z`); a caller
+  variable is read once, where `@filter` is called, after the data set. Names the condition
+  binds itself, `e` included, keep Julia's own scope rules, each starting as the property or
+  caller variable of that name (`e` as the emitter), and its assignments never reach the
+  caller's variables (a name it declares `global` is the module's). Other macros expand first;
+  in a nested `@filter`, a free name follows the outer condition. Keyword names, field names,
+  types in `x::T` and quoted code are not names. The condition gives `true` or `false` (or `1`
+  or `0`); one written as an assignment (`dataset = 1`) is refused.
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
@@ -396,11 +398,12 @@ by_dataset = merge_smld([smld_a, smld_b]; adjust_datasets = true)
   calibration included) and the same emitter type.
 - Renumbering moves each input by the earlier inputs' total `n_frames` (or `n_datasets`), and
   needs a `frame` (or `dataset`) property; `Emitter2D` and `Emitter3D` have neither. The inputs
-  are never modified. A renumbered emitter shares its object fields with the input; a type with
-  its own `setproperty!` is deep-copied and set through it, both numbers computed first (a
-  setter that changes the other number throws). A move starts from `e.frame` and `e.dataset`
-  (read on a copy) for a mutable type and from the fields for an immutable one, as in 0.1.0. Sums, moved numbers and result counts are checked: one that does
-  not fit throws, never wraps or rounds.
+  are never modified. A renumbered emitter is built from the input's fields and shares its
+  object fields with the input. A type with its own `getproperty` (mutable types) or
+  `setproperty!` is deep-copied and moved through them, both numbers read first (as 0.1.0 read
+  `e.frame`); each moved number must then read as set and the other as before, or it throws (a
+  setter that changes the other number or clamps). Sums, moved numbers and result counts are
+  exact: one that does not fit throws, never wraps or rounds.
 - Metadata is a copy of the first input's, plus `"concatenated_from"` (`cat_smld`) or
   `"merged_from"`, `"frame_adjustment"` and `"dataset_adjustment"` (`merge_smld`). The other
   inputs' metadata are dropped.
