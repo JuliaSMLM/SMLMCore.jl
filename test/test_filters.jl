@@ -589,8 +589,14 @@ end
     per_frame(s) = [length(@filter(s, frame == $f)) for f in 1:3]
     @test per_frame(s) == [1, 1, 1]
 
-    # A name that is neither throws when the condition runs
-    @test_throws UndefVarError @filter(s, photons > not_defined_anywhere)
+    # A name that is neither throws getproperty's error, naming it, when the condition runs
+    # (a FieldError from Julia 1.12, an ErrorException before), as 0.1.0 did
+    err = try
+        @filter(s, photons > not_defined_anywhere); nothing
+    catch ex
+        ex
+    end
+    @test err isa Exception && occursin("not_defined_anywhere", sprint(showerror, err))
 
     # The data-set expression is evaluated once
     calls = Ref(0)
@@ -607,6 +613,76 @@ end
     @test @inferred(SMLMCore._filter_smld(s, e -> e.photons > 1000.0)) isa typeof(s)
 end
 
+# An emitter whose property `accept` holds a function, for the call-position rule
+struct AcceptTestEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    photons::Float64
+    accept::Function
+end
+_never(v) = false
+_lower_than(v; lo) = v < lo
+_filter_in_function(s, t) = (x_max = t; @filter(s, x < x_max && frame in 1:2))
+
+@testset "@filter: names the condition binds, calls, and 0.1.0 forms" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, sx, sx, 50.0, 2.0; frame = f, dataset = d)
+                   for (x, ph, f, d, sx) in ((0.5, 900.0, 1, 1, 0.01), (1.5, 1100.0, 2, 2, 0.03),
+                                             (-2.0, 1300.0, 3, 1, 0.01))],
+                  cam, 3, 2, Dict{String,Any}())
+    xs(r) = [e.x for e in r.emitters]
+
+    # A name bound by the condition is its own, even when it is also a property
+    @test xs(@filter(s, all(x -> x < 0.02, (σ_x, σ_y)))) == [0.5, -2.0]
+    @test xs(@filter(s, any(x > 1.0 for x in (0.0, 0.5)))) == Float64[]
+    @test xs(@filter(s, any(x > 5 for x in (10,)))) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, sum(v for v in (x, photons) if v > 1) > 1000)) == [1.5, -2.0]
+    @test xs(@filter(s, [x for x in (x,)][1] > 0)) == [0.5, 1.5]   # the iterator's x is the property
+    @test xs(@filter(s, let frame = 9; frame == 9 end)) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, let f = frame; f == 2 end)) == [1.5]
+    @test xs(@filter(s, begin y2 = 2x; y2 > 1.0 end)) == [1.5]
+
+    # Locals of the calling function, and `$name` there
+    @test xs(_filter_in_function(s, 1.0)) == [0.5]
+    g(s) = (frame = 2; @filter(s, frame == $frame))
+    @test xs(g(s)) == [1.5]
+
+    # The function called follows the same rule: the emitter's property, else the caller's;
+    # `$f` is always the caller's. Broadcast calls too.
+    sa = BasicSMLD([AcceptTestEmitter(1.0, 1.0, 1.0, v -> v > 0.5),
+                    AcceptTestEmitter(0.2, 1.0, 1.0, v -> v > 0.5)], cam, 1, 1)
+    accept = _never
+    @test length(@filter(sa, accept(x))) == 1
+    @test length(@filter(sa, $accept(x))) == 0
+    @test xs(@filter(s, abs.(x) .> 1.0)) == [1.5, -2.0]
+    @test xs(@filter(s, $abs(x) > 1.0)) == [1.5, -2.0]
+
+    # Macros, keyword names and the `; lo` shorthand, and quoted code are left as written
+    @test xs(@filter(s, @inbounds(x > 1.0))) == [1.5]
+    @test xs(@filter(s, occursin(r"^1", string(x)))) == [1.5]
+    lo = 1.0
+    @test xs(@filter(s, _lower_than(x; lo))) == [0.5, -2.0]
+    @test xs(@filter(s, _lower_than(x; lo = 0.0))) == [-2.0]
+    @test xs(@filter(s, only(isapprox.((x,), 1.5; atol = 0.1)))) == [1.5]
+    q = :(x + 1)
+    @test xs(@filter(s, q == :(x + 1))) == [0.5, 1.5, -2.0]
+
+    # 0.1.0 forms: e.name reads the emitter; a property computed by getproperty but not listed in
+    # propertynames is read when no variable of that name is defined
+    @test xs(@filter(s, e.x > 1)) == [1.5]
+    e = 7
+    @test xs(@filter(s, e.x > 1)) == [1.5]
+    d = BasicSMLD([DeclaredOnlyLoc{2,Float64}((0.5, 1.0), 1000.0, 1, 1, 0, 0),
+                   DeclaredOnlyLoc{2,Float64}((1.5, 1.0), 1000.0, 1, 1, 0, 0)], cam, 1, 1)
+    @test [p.x for p in (@filter(d, x > 1.0)).emitters] == [1.5]
+    @test_throws Exception @filter(s, no_such_name > 1)   # getproperty's error
+
+    # A number as the answer keeps by its truth, as in 0.1.0; it never selects by position
+    @test xs(@filter(s, 1)) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, 0)) == Float64[]
+    @test_throws InexactError @filter(s, frame)
+end
+
 @testset "filter_roi warns for ranges that may have lost their stop" begin
     cam = IdealCamera(64, 64, 0.1)
     xs = [0.2, 0.95, 1.0, 1.6, 1.8]
@@ -621,6 +697,7 @@ end
     @test_logs filter_roi(s2, [0.5, 1.7], [0.0, 2.0])
     @test_logs filter_roi(s2, 0:2, 0:2)
     @test_logs filter_roi(s2, Base.OneTo(2), 0:2)
+    @test_logs filter_roi(s2, 0:1:2, 2:-1:0)                    # step 1 written out, or -1
     @test_logs filter_roi(s3, (0.0, 2.0), (0.0, 2.0), (0.0, 1.0))
 
     # Any other range warns; the bounds and so the result are those of 0.1.0

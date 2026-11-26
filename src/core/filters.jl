@@ -4,15 +4,22 @@
 Return a new SMLD with the emitters for which `condition` holds, a Julia expression written in
 terms of emitter properties.
 
-Each name in `condition` is an emitter property when the emitter has a property of that name,
-and otherwise the variable or function of that name where `@filter` is called. A condition can
-therefore mix properties with local variables, constants and functions:
+Each name in `condition` is an emitter property when the emitter has a property of that name
+(`hasproperty`), and otherwise the variable or function of that name where `@filter` is called.
+A condition can therefore mix properties with local variables, constants and functions:
 `@filter(smld, photons > threshold)`, `@filter(smld, abs(x) < 1.0)`,
 `@filter(smld, !(frame in skip))`, `@filter(smld, frame in 1:10 && x ≤ x_max)`. A name that is
 both an emitter property and a variable reads the property; write `\$name` for the variable:
 `@filter(smld, dataset == \$dataset)` keeps the emitters of the data set numbered by the
-variable `dataset`. A name that is neither throws an `UndefVarError` when the condition runs.
-The condition must give `true` or `false` for each emitter.
+variable `dataset`, and `\$f(x)` calls the caller's `f`. A name that is neither is read with
+`getproperty`, so a property that the emitter computes without listing it in `propertynames`
+is still read when no variable of that name is defined, and a missing one throws the error
+`getproperty` gives. `e.name` reads the emitter's property `name`, as in 0.1.0.
+
+Operators (`>`, `in`, `&&`) are never properties. Names that the condition binds itself, in
+`x -> ...`, a generator or comprehension, `let` or an assignment, keep their own values there:
+`@filter(smld, all(s -> s < 0.02, (σ_x, σ_y)))`. Macros, keyword names and quoted code are left
+as written. The condition must give `true` or `false` (or `1` or `0`) for each emitter.
 
 The result has a new emitter vector, but its emitters are the input's own mutable objects:
 setting `bright.emitters[1].photons = 0` changes `smld` as well. `deepcopy` the result before
@@ -50,60 +57,163 @@ julia> length(@filter(smld, frame == \$frame))
 """
 macro filter(smld, condition)
     e = gensym(:emitter)
-    test = _filter_condition(condition, e)
+    test = _filter_condition(condition, e, Set{Symbol}())
     return esc(:($(GlobalRef(@__MODULE__, :_filter_smld))($smld, $e -> $test)))
 end
 
-# The body of a `@filter` condition, rewritten as a function of the emitter `e`: a name is the
-# emitter's property when it has one and otherwise the caller's variable; `$name` is always the
-# caller's variable. Function positions, keyword names and bound names (in `->`, generators,
-# `let`) are left as written. The whole result is escaped by `@filter`, so every name not
-# rewritten resolves where `@filter` is called.
-function _filter_condition(ex, e::Symbol)
+# The body of a `@filter` condition, rewritten as a function of the emitter `e`. Each free name
+# becomes `_filter_name`; `$name` is the caller's; names in `bound` (bound by the condition
+# itself) stay. The whole result is escaped by `@filter`, so every name left as written resolves
+# where `@filter` is called.
+function _filter_condition(ex, e::Symbol, bound::Set{Symbol})
     if ex isa Symbol
-        ex in (:end, :begin) && return ex
-        prop = QuoteNode(ex)
-        return :($(GlobalRef(Base, :hasproperty))($e, $prop) ?
-                 $(GlobalRef(Base, :getproperty))($e, $prop) : $ex)
-    elseif ex isa Expr
-        h, args = ex.head, ex.args
-        if h === :$
-            return args[1]
-        elseif h === :call
-            return Expr(:call, args[1], (_filter_argument(a, e) for a in args[2:end])...)
-        elseif h === :comparison  # a < b <= c: operands at odd positions, operators between
-            return Expr(:comparison,
-                        (isodd(i) ? _filter_condition(a, e) : a for (i, a) in enumerate(args))...)
-        elseif h === :.  # a.b reads property b of a; f.(x) broadcasts f
-            target = args[2] isa QuoteNode ? args[2] : _filter_condition(args[2], e)
-            return Expr(:., args[2] isa QuoteNode ? _filter_condition(args[1], e) : args[1], target)
-        elseif h === :-> || h === :(=)  # bound names stay; the body or value is a condition
-            return Expr(h, args[1], (_filter_condition(a, e) for a in args[2:end])...)
-        else
-            return Expr(h, (_filter_condition(a, e) for a in args)...)
-        end
-    else
+        (ex in bound || ex === :end || ex === :begin) && return ex
+        return _filter_name(ex, e)
+    elseif !(ex isa Expr)
         return ex  # literals, quoted symbols, line numbers
+    end
+    h, args = ex.head, ex.args
+    if h === :$
+        return args[1]
+    elseif h === :quote || h === :inert  # quoted code is data
+        return ex
+    elseif h === :call
+        return Expr(:call, _filter_callee(args[1], e, bound),
+                    (_filter_argument(a, e, bound) for a in args[2:end])...)
+    elseif h === :. && args[2] isa QuoteNode  # a.b reads property b of a; e.b of the emitter
+        obj = args[1] === :e && !(:e in bound) ? e : _filter_condition(args[1], e, bound)
+        return Expr(:., obj, args[2])
+    elseif h === :. && args[2] isa Expr && args[2].head === :tuple  # f.(x) broadcasts f
+        return Expr(:., _filter_callee(args[1], e, bound),
+                    Expr(:tuple, (_filter_argument(a, e, bound) for a in args[2].args)...))
+    elseif h === :comparison  # a < b <= c: operands at odd positions, operators between
+        return Expr(:comparison, (isodd(i) ? _filter_condition(a, e, bound) : a
+                                  for (i, a) in enumerate(args))...)
+    elseif h === :macrocall  # the macro's name and line stay
+        return Expr(:macrocall, args[1], args[2],
+                    (_filter_condition(a, e, bound) for a in args[3:end])...)
+    elseif h === :->
+        inner = union(bound, _bound_names(args[1]))
+        return Expr(:->, args[1], (_filter_condition(a, e, inner) for a in args[2:end])...)
+    elseif h === :let
+        return _filter_let(ex, e, bound)
+    elseif h === :generator
+        return _filter_generator(ex, e, bound)
+    elseif h === :block
+        return _filter_block(ex, e, bound)
+    elseif h === :(=)  # an assignment (or a named-tuple entry) keeps its name
+        return Expr(:(=), args[1], _filter_condition(args[2], e, bound))
+    else
+        return Expr(h, (_filter_argument(a, e, bound) for a in args)...)
     end
 end
 
-# An argument of a call in a condition: a keyword keeps its name.
-function _filter_argument(ex, e::Symbol)
-    if ex isa Expr && ex.head === :kw
-        return Expr(:kw, ex.args[1], _filter_condition(ex.args[2], e))
-    elseif ex isa Expr && ex.head === :parameters
-        return Expr(:parameters, (_filter_argument(a, e) for a in ex.args)...)
-    else
-        return _filter_condition(ex, e)
+# A free name: the emitter's property when it has one, else the caller's variable or function
+# when one is defined, else `getproperty` (a property computed but not listed in
+# `propertynames`, or the error for a missing one).
+function _filter_name(n::Symbol, e::Symbol)
+    p = QuoteNode(n)
+    get = :($(GlobalRef(Base, :getproperty))($e, $p))
+    return :($(GlobalRef(Base, :hasproperty))($e, $p) ? $get :
+             $(Expr(:isdefined, n)) ? $n : $get)
+end
+
+# The function called: `$f` is the caller's, an operator is never a property, any other name
+# follows `_filter_name`.
+function _filter_callee(f, e::Symbol, bound::Set{Symbol})
+    f isa Expr && f.head === :$ && return f.args[1]
+    if f isa Symbol
+        (f in bound || Base.isoperator(f) || f === :in || f === :isa) && return f
+        return _filter_name(f, e)
     end
+    return _filter_condition(f, e, bound)
+end
+
+# An argument: a keyword keeps its name, and `f(x; lo)` stays `f(x; lo = lo)`.
+function _filter_argument(ex, e::Symbol, bound::Set{Symbol})
+    if ex isa Expr && ex.head === :kw
+        return Expr(:kw, ex.args[1], _filter_condition(ex.args[2], e, bound))
+    elseif ex isa Expr && ex.head === :parameters
+        return Expr(:parameters, (p isa Symbol ? Expr(:kw, p, _filter_condition(p, e, bound)) :
+                                  _filter_argument(p, e, bound) for p in ex.args)...)
+    else
+        return _filter_condition(ex, e, bound)
+    end
+end
+
+# The names an argument list or assignment target binds: `x`, `(a, b)`, `x::T`, `x = 1`, `xs...`.
+_bound_names(s::Symbol) = Symbol[s]
+function _bound_names(ex::Expr)
+    if ex.head in (:tuple, :parameters, :block)
+        return reduce(vcat, (_bound_names(a) for a in ex.args); init = Symbol[])
+    elseif ex.head in (:kw, :..., :(=)) || (ex.head === :(::) && length(ex.args) == 2)
+        return _bound_names(ex.args[1])
+    end
+    return Symbol[]
+end
+_bound_names(_) = Symbol[]
+
+# `let a = v, b = w; body end`: each value sees the names bound before it, the body all of them.
+function _filter_let(ex::Expr, e::Symbol, bound::Set{Symbol})
+    binds, body = ex.args
+    specs = binds isa Expr && binds.head === :block ? binds.args : Any[binds]
+    inner = copy(bound)
+    out = Any[]
+    for s in specs
+        if s isa Expr && s.head === :(=)
+            push!(out, Expr(:(=), s.args[1], _filter_condition(s.args[2], e, inner)))
+            union!(inner, _bound_names(s.args[1]))
+        else
+            s isa Symbol && push!(inner, s)  # `let x`: a new local
+            push!(out, s)
+        end
+    end
+    newbinds = binds isa Expr && binds.head === :block ? Expr(:block, out...) : out[1]
+    return Expr(:let, newbinds, _filter_condition(body, e, inner))
+end
+
+# `body for x in xs, y in ys if cond`: iterators see the names outside, the body and the
+# condition see the loop names too.
+function _filter_generator(ex::Expr, e::Symbol, bound::Set{Symbol})
+    inner = copy(bound)
+    spec(s) = s isa Expr && s.head === :(=) ?
+        Expr(:(=), s.args[1], _filter_condition(s.args[2], e, bound)) : s
+    out = Any[]
+    for s in ex.args[2:end]
+        if s isa Expr && s.head === :filter
+            fspecs = Any[spec(t) for t in s.args[2:end]]
+            foreach(t -> union!(inner, _bound_names(t)), s.args[2:end])
+            push!(out, Expr(:filter, _filter_condition(s.args[1], e, inner), fspecs...))
+        else
+            push!(out, spec(s))
+            union!(inner, _bound_names(s))
+        end
+    end
+    return Expr(:generator, _filter_condition(ex.args[1], e, inner), out...)
+end
+
+# A block: a name assigned in it is bound for the statements after the assignment.
+function _filter_block(ex::Expr, e::Symbol, bound::Set{Symbol})
+    inner = copy(bound)
+    out = Any[]
+    for s in ex.args
+        if s isa Expr && s.head === :(=)
+            push!(out, Expr(:(=), s.args[1], _filter_condition(s.args[2], e, inner)))
+            union!(inner, _bound_names(s.args[1]))
+        else
+            push!(out, _filter_condition(s, e, inner))
+        end
+    end
+    return Expr(:block, out...)
 end
 
 # The `@filter` result: the emitters for which `keep` holds, with the input's camera, frame and
-# data-set counts and a copy of its metadata.
+# data-set counts and a copy of its metadata. The mask converts each answer to `Bool`, so a
+# condition that gives a number keeps by its truth (1 or 0), never selects by position.
 function _filter_smld(smld, keep)
     emitters = smld.emitters
     return typeof(smld)(
-        emitters[map(keep, emitters)],
+        emitters[Bool[keep(x) for x in emitters]],
         smld.camera,
         smld.n_frames,
         smld.n_datasets,
@@ -161,12 +271,12 @@ end
 
 # The (min, max) bounds of one side of a region: a tuple, a vector or a range.
 _roi_bounds(b) = extrema(b)
-# Whole numbers in steps of 1 always end at the number written.
-_roi_bounds(r::AbstractUnitRange{<:Integer}) = extrema(r)
-# Any other range may have lost its stop (0.0:0.3:1.0 ends at 0.9), and the shortened range is
-# the same value as one written to end there, so every such range warns.
+# Whole numbers in steps of 1 (`0:2`, `0:1:2`, `2:-1:0`) always end at the number written. Any
+# other range may have lost its stop (0.0:0.3:1.0 ends at 0.9), and the shortened range is the
+# same value as one written to end there, so every such range warns.
 function _roi_bounds(r::AbstractRange)
     lo, hi = extrema(r)
+    r isa AbstractRange{<:Integer} && isone(abs(step(r))) && return lo, hi
     @warn "filter_roi takes the range $r as the bounds $lo to $hi: a range stops at its " *
           "last whole step, which can fall short of the number written. Pass the bounds as " *
           "a tuple (min, max)." maxlog = 1
@@ -181,10 +291,11 @@ Return a new SMLD with the emitters inside a rectangle (2D) or a box (3D).
 
 # Arguments
 - `x_range`, `y_range`, `z_range`: the bounds in µm, inclusive, each a tuple `(min, max)` or a
-  range. A range's smallest and largest elements are the bounds, so `0.0:0.3:1.0` stops at 0.9.
-  A range stops at its last whole step, which can fall short of the number written, and the
-  shortened range cannot be told from one written to stop there, so any range other than
-  whole numbers in steps of 1 (`0:2`) logs a warning, once per Julia session. Pass a tuple.
+  range. A range's smallest and largest elements are the bounds. A range stops at its last
+  whole step, so `0.0:0.3:1.0` stops at 0.9, and the shortened range cannot be told from one
+  written to stop there; any range other than whole numbers in steps of 1 (`0:2`, `0:1:2`)
+  therefore logs a warning, once per logger (once per Julia session with the default logger).
+  Pass a tuple.
 
 # Notes
 The emitters' dimension ([`emitter_ndims`](@ref)) picks the form: the 2D form needs dimension 2
