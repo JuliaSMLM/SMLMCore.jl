@@ -349,9 +349,10 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclu
   binds itself, `e` included, keep Julia's own scope rules, each starting as the property or
   caller variable of that name (`e` as the emitter), and its assignments never reach the
   caller's variables (a name it declares `global` is the module's). Other macros expand first;
-  in a nested `@filter`, a free name follows the outer condition. Keyword names, field names,
-  types in `x::T` and quoted code are not names. The condition gives `true` or `false` (or `1`
-  or `0`); one written as an assignment (`dataset = 1`) is refused.
+  in a nested `@filter`, a free name is the inner emitter's property, else follows the outer
+  condition. Keyword names, field names, types in `x::T` and quoted code are not names. The
+  condition gives `true` or `false` (or `1` or `0`); one whose value is an assignment
+  (`dataset = 1`) is refused.
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
@@ -399,11 +400,12 @@ by_dataset = merge_smld([smld_a, smld_b]; adjust_datasets = true)
 - Renumbering moves each input by the earlier inputs' total `n_frames` (or `n_datasets`), and
   needs a `frame` (or `dataset`) property; `Emitter2D` and `Emitter3D` have neither. The inputs
   are never modified. A renumbered emitter is built from the input's fields and shares its
-  object fields with the input. A type with its own `getproperty` (mutable types) or
-  `setproperty!` is deep-copied and moved through them, both numbers read first (as 0.1.0 read
-  `e.frame`); each moved number must then read as set and the other as before, or it throws (a
-  setter that changes the other number or clamps). Sums, moved numbers and result counts are
-  exact: one that does not fit throws, never wraps or rounds.
+  object fields with the input. A type with its own `getproperty` or `setproperty!` is
+  deep-copied: a mutable one is moved through them, both numbers read first and the setter
+  given `e.frame + offset` as in 0.1.0; an immutable one is rebuilt from its fields. Either way
+  both numbers must then read as moved, or it throws (a setter that changes the other number or
+  clamps, a getter that maps the stored frame). Sums, moved numbers and result counts are exact:
+  one that does not fit throws, never wraps or rounds.
 - Metadata is a copy of the first input's, plus `"concatenated_from"` (`cat_smld`) or
   `"merged_from"`, `"frame_adjustment"` and `"dataset_adjustment"` (`merge_smld`). The other
   inputs' metadata are dropped.
