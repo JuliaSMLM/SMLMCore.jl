@@ -313,7 +313,8 @@ edges_x, edges_y = compute_bin_edges(1:512, 1:512, 0.1)    # pixel edges, µm, f
   computed as `(n - 1) * pixel_size` can fall in pixel `n - 1`). It does not check bounds.
 - `pixel_to_physical` returns `pixel_size`'s type, so `pixel_size` must be a float.
   `physical_to_pixel` keeps the type of `x / pixel_size` (Float32 stays Float32), and gives the
-  nearest Float64 when a `Rational` meets a `Rational` or an integer.
+  Float64 nearest the exact value (rounded once) when a `Rational` meets a `Rational` or an
+  integer.
 
 ### Filtering Operations
 
@@ -337,12 +338,14 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclu
 - In `@filter`, a name in the condition is an emitter property when the emitter has one of that
   name (`hasproperty`), and otherwise the variable or function of that name where `@filter` is
   called; called functions follow the same rule. A name that is both reads the property;
-  `$name` reads the variable and `$f(x)` calls the caller's `f`. A name that is neither is read
-  with `getproperty`, which reads a property the emitter computes without listing it and
-  otherwise throws its error. `e.name` reads the emitter's property. Operators are never
-  properties; names the condition binds (`x -> ...`, generators, `let`, assignments) keep their
-  own values; macros, keyword names and quoted code stay as written. The condition gives `true`
-  or `false` (or `1` or `0`).
+  `$name` reads the variable and `$f(x)` calls the caller's `f`, each `$expr` evaluated once
+  where `@filter` is called. A name that is neither is read with `getproperty`, which reads a
+  property the emitter computes without listing it and otherwise throws its error. `e.name`
+  reads the emitter's property. Operators are never properties. Names the condition binds keep
+  their own values by Julia's scope rules (arguments, loop, generator and `let` variables,
+  `catch` variables, names it assigns or declares `local`), and its assignments never reach the
+  caller's variables. Other macros expand first (a nested `@filter` works); keyword names and
+  quoted code stay as written. The condition gives `true` or `false` (or `1` or `0`).
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
@@ -391,7 +394,8 @@ by_dataset = merge_smld([smld_a, smld_b]; adjust_datasets = true)
   needs a `frame` (or `dataset`) property; `Emitter2D` and `Emitter3D` have neither. The inputs
   are never modified. A renumbered emitter is rebuilt from the input's fields, so its object
   fields stay shared with the input; a type with its own `setproperty!` is deep-copied and set
-  through it. Sums and moved numbers are checked: one that does not fit throws, never wraps.
+  through it, both numbers computed first. Moves start from `e.frame` and `e.dataset`. Sums and
+  moved numbers are checked: one that does not fit throws, never wraps.
 - Metadata is a copy of the first input's, plus `"concatenated_from"` (`cat_smld`) or
   `"merged_from"`, `"frame_adjustment"` and `"dataset_adjustment"` (`merge_smld`). The other
   inputs' metadata are dropped.

@@ -45,7 +45,8 @@ Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
   the columns; y increases downward, along the rows.
 - Columns and rows are numbered from 1, so pixel `(1, 1)` is the top-left pixel.
 - A camera stores its pixel edges, `pixel_edges_x` and `pixel_edges_y`: `N + 1` edges per axis
-  for `N` pixels, increasing from 0. Constructors do not check this; `physical_to_pixel*` and the
+  for `N` pixels, increasing, from 0 for a whole sensor (a crop's start at its corner, below).
+  Constructors do not check this; `physical_to_pixel*` and the
   uniform-pixel formulas assume it, and the cameras' displays assume uniform pixels (they report
   the first pixel's width).
 - With uniform pixels of `Δx` × `Δy`, pixel `(col, row)` covers
@@ -63,10 +64,11 @@ Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
 - A camera of a crop of the sensor is built from the crop's own edges, which start at the crop's
   corner in sensor µm: `IdealCamera(collect(7.68:0.12:15.36), collect(0.0:0.12:15.36))` for
   columns 65 to 128 and rows 1 to 128 of a sensor with 0.12 µm pixels. Positions are then in
-  sensor µm, and `physical_to_pixel*` give sensor pixel numbers (column 65 for the crop's first
-  column). For numbers within the crop, from `(1, 1)`, subtract the crop's first edges from the
-  position first. A pixel range (`65:128`) is refused, since a range always means a whole
-  sensor, from 0 µm.
+  sensor µm, and for a sensor of uniform square pixels `physical_to_pixel*` give sensor pixel
+  numbers (column 65 for the crop's first column); for rectangular or uneven pixels use the
+  crop's edges, as above. For numbers within the crop, from `(1, 1)`, subtract the crop's first
+  edges from the position first. A pixel range (`65:128`) is refused, since a range always means
+  a whole sensor, from 0 µm.
 
 ## Array order
 
