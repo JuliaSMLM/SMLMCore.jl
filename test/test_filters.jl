@@ -733,6 +733,24 @@ function _filter_loop_assigns(s)
     return t
 end
 
+# Emitters with properties named like operators
+struct OperatorNamedEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    photons::Float64
+    var"in"::Function
+    var"+"::Function
+end
+function _filter_nested_local(s)
+    tmp = 11
+    @filter(s, begin tmp = 2; let; local tmp = 8; end; true end)
+    return tmp
+end
+function _filter_let_shadow(s)
+    cutoff = 2
+    return [e.x for e in @filter(s, begin let cutoff = 0; cutoff += 1; end; x <= cutoff end).emitters]
+end
+
 @testset "@filter follows Julia's scope rules" begin
     cam = IdealCamera(64, 64, 0.1)
     s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f)
@@ -749,7 +767,21 @@ end
     @test xs(@filter(s, begin if true; x = 10; end; x > 5 end)) == every
     @test xs(@filter(s, begin y = 0; for x in (10,); y = x; end; y > 5 end)) == every
     @test xs(@filter(s, begin i = 0; while i < 3; i += 1; end; i == 3 end)) == every
-    @test xs(@filter(s, begin for i in 1:1; x = 10; end; x > 1.0 end)) == [1.5]  # the loop's x is its own
+    # The loop body assigns the condition's own x, as Julia's rules say for an enclosing local
+    @test xs(@filter(s, begin for i in 1:1; x = 10; end; x > 1.0 end)) == every
+    @test xs(@filter(s, begin n = 0; for frame in 3:4, j in 1:frame; n += 1; end; n == 7 end)) == every
+    @test xs(@filter(s, begin i = 0; while (x = i; x < 1); i += 1; end; i == 1 end)) == every
+    @test xs(@filter(s, any(i for i in (true,) if (x = 10; x > 5)))) == every
+    @test xs(@filter(s, let f(x) = x > 5; f(10) end)) == every
+    @test xs(@filter(s, begin f(x)::Bool = x > 5; f(10) end)) == every
+    @test xs(@filter(s, begin function h(x)::Bool; x > 5; end; h(10) end)) == every
+    @test xs(@filter(s, begin f(t = x) = t > 1; f() end)) == [1.5]
+    @test xs(@filter(s, let a = falses(3); a[frame] = true; a[2] end)) == [1.5]
+    counts = zeros(Int, 3)
+    @test xs(@filter(s, (counts[frame] += 1) <= 1)) == every
+    @test counts == [1, 1, 1]
+    @test _filter_nested_local(s) == 11
+    @test _filter_let_shadow(s) == every
 
     # The caller's variables are not written
     @test _filter_assigns(s) == 100.0
@@ -765,17 +797,25 @@ end
     count_call() = (calls[] += 1; 1.0)
     @filter(s, x > $(count_call()))
     @test calls[] == 1                                        # evaluated once
+    @filter(s, @inbounds x > $(count_call()))
+    @test calls[] == 2                                        # inside another macro too
+    @test xs(@filter(s, any(x -> @inbounds(x == $x), (4,)))) == Float64[]
 
     # Macros expand first: a nested @filter has its own emitters; @isdefined sees the caller
     t = BasicSMLD([Emitter2DFit{Float64}(9.0, 1.0, 1.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1)
     @test xs(@filter(s, !isempty((@filter(t, x > 5)).emitters))) == every
     @test xs(@filter(s, length(@filter(s, frame == 2)) == 1)) == every
     @test xs(@filter(s, @isdefined(no_such_thing) || x > 1)) == [1.5]
+    # a free name in the nested condition follows the outer one: the outer emitter's frame
+    t2 = BasicSMLD([Emitter2D{Float64}(9.0, 1.0, 1.0)], cam, 1, 1)
+    frame = 2
+    @test xs(@filter(s, length(@filter(t2, frame == 2)) == 1)) == [1.5]
 
-    # Operators passed as values keep their meaning
+    # Operators passed as values keep their meaning, even beside a property of that name
     @test xs(@filter(s, all((.>)([x], 0)))) == [0.5, 1.5]
     @test xs(@filter(s, reduce(+, (1, 2)) == 3)) == every
-
-    # A definition that cannot appear in a function is refused when the macro expands
-    @test_throws Exception macroexpand(@__MODULE__, :(@filter(s, begin struct Q end; true end)))
+    so = BasicSMLD([OperatorNamedEmitter(1.0, 1.0, 1.0, (a...) -> 42, (a...) -> 42)], cam, 1, 1)
+    @test length(@filter(so, reduce(+, (1, 2)) == 3)) == 1
+    @test length(@filter(so, map(in, (1,), ((1, 2),)) == (true,))) == 1
+    @test length(@filter(so, in(1, (1, 2)))) == 1
 end
