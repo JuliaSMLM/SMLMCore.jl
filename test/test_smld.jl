@@ -156,7 +156,7 @@ end
         @test bright.metadata !== smld.metadata
         
         # Test metadata preservation with ROI filtering
-        roi = filter_roi(smld, 0.0:2.0, 1.0:3.0)
+        roi = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))
         @test roi.metadata["exposure_time"] == 0.1
         @test roi.metadata !== smld.metadata
     end

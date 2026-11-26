@@ -606,3 +606,39 @@ end
     @test r.emitters[1] === s.emitters[2]
     @test @inferred(SMLMCore._filter_smld(s, e -> e.photons > 1000.0)) isa typeof(s)
 end
+
+@testset "filter_roi warns for ranges that may have lost their stop" begin
+    cam = IdealCamera(64, 64, 0.1)
+    xs = [0.2, 0.95, 1.0, 1.6, 1.8]
+    s2 = BasicSMLD([Emitter2D{Float64}(x, 1.0, 1000.0) for x in xs], cam, 1, 1)
+    s3 = BasicSMLD([Emitter3D{Float64}(x, 1.0, 0.5, 1000.0) for x in xs], cam, 1, 1)
+    getx(r) = [e.x for e in r.emitters]
+    warned = (:warn, r"filter_roi takes the range .* as the bounds .*Pass the bounds as a tuple")
+
+    # Tuples, vectors and whole numbers in steps of 1 end where written: no warning
+    r = @test_logs filter_roi(s2, (0.5, 1.7), (0.0, 2.0))
+    @test getx(r) == [0.95, 1.0, 1.6]
+    @test_logs filter_roi(s2, [0.5, 1.7], [0.0, 2.0])
+    @test_logs filter_roi(s2, 0:2, 0:2)
+    @test_logs filter_roi(s2, Base.OneTo(2), 0:2)
+    @test_logs filter_roi(s3, (0.0, 2.0), (0.0, 2.0), (0.0, 1.0))
+
+    # Any other range warns; the bounds and so the result are those of 0.1.0
+    r = @test_logs warned filter_roi(s2, 0.0:0.3:1.0, (0.0, 2.0))
+    @test getx(r) == [0.2]                         # the range ends at 0.9, not at 1.0
+    @test_logs (:warn, r"as the bounds 0\.0 to 0\.9") filter_roi(s2, 0.0:0.3:1.0, (0.0, 2.0))
+    r = @test_logs warned filter_roi(s2, 0.5:1.7, (0.0, 2.0))
+    @test getx(r) == [0.95, 1.0]                   # 0.5:1.7 is 0.5:1.5
+    @test getx(@test_logs warned filter_roi(s2, 0.0:2.0, 1.0:3.0)) == xs
+    @test_logs warned filter_roi(s2, 0:2:8, (0.0, 2.0))       # integer steps of 2 may skip a stop
+    @test_logs warned filter_roi(s2, (0.0, 2.0), 0.0:2.0)
+    @test_logs warned filter_roi(s3, (0.0, 2.0), (0.0, 2.0), 0.0:0.5:1.0)
+    @test_logs warned filter_roi(s3, 0.0:2.0, (0.0, 2.0), (0.0, 1.0))
+    @test_logs warned filter_roi(s2, 2.0:-1.0:0.0, (0.0, 2.0))   # descending: bounds 0 to 2
+
+    # Once per logger: two ranges in one call, then a second call, give one warning
+    @test_logs warned begin
+        filter_roi(s2, 0.0:2.0, 1.0:3.0)
+        filter_roi(s3, 0.0:2.0, 0.0:2.0, 0.0:1.0)
+    end
+end

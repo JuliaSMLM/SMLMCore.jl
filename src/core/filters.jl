@@ -159,6 +159,20 @@ function filter_frames(smld::AbstractSMLD, frames::Union{AbstractVector,Abstract
     )
 end
 
+# The (min, max) bounds of one side of a region: a tuple, a vector or a range.
+_roi_bounds(b) = extrema(b)
+# Whole numbers in steps of 1 always end at the number written.
+_roi_bounds(r::AbstractUnitRange{<:Integer}) = extrema(r)
+# Any other range may have lost its stop (0.0:0.3:1.0 ends at 0.9), and the shortened range is
+# the same value as one written to end there, so every such range warns.
+function _roi_bounds(r::AbstractRange)
+    lo, hi = extrema(r)
+    @warn "filter_roi takes the range $r as the bounds $lo to $hi: a range stops at its " *
+          "last whole step, which can fall short of the number written. Pass the bounds as " *
+          "a tuple (min, max)." maxlog = 1
+    return lo, hi
+end
+
 """
     filter_roi(smld, x_range, y_range)
     filter_roi(smld, x_range, y_range, z_range)
@@ -168,6 +182,9 @@ Return a new SMLD with the emitters inside a rectangle (2D) or a box (3D).
 # Arguments
 - `x_range`, `y_range`, `z_range`: the bounds in µm, inclusive, each a tuple `(min, max)` or a
   range. A range's smallest and largest elements are the bounds, so `0.0:0.3:1.0` stops at 0.9.
+  A range stops at its last whole step, which can fall short of the number written, and the
+  shortened range cannot be told from one written to stop there, so any range other than
+  whole numbers in steps of 1 (`0:2`) logs a warning, once per Julia session. Pass a tuple.
 
 # Notes
 The emitters' dimension ([`emitter_ndims`](@ref)) picks the form: the 2D form needs dimension 2
@@ -192,8 +209,8 @@ julia> length(filter_roi(smld, (1.5, 2.0), (1.0, 3.0)))
 ```
 """
 function filter_roi(smld::AbstractSMLD, x_range, y_range)
-    x_min, x_max = extrema(x_range)
-    y_min, y_max = extrema(y_range)
+    x_min, x_max = _roi_bounds(x_range)
+    y_min, y_max = _roi_bounds(y_range)
 
     d = emitter_ndims(smld.emitters)
     if d == 2 || (d === nothing && isempty(smld.emitters))
@@ -213,9 +230,9 @@ function filter_roi(smld::AbstractSMLD, x_range, y_range)
 end
 
 function filter_roi(smld::AbstractSMLD, x_range, y_range, z_range)
-    x_min, x_max = extrema(x_range)
-    y_min, y_max = extrema(y_range)
-    z_min, z_max = extrema(z_range)
+    x_min, x_max = _roi_bounds(x_range)
+    y_min, y_max = _roi_bounds(y_range)
+    z_min, z_max = _roi_bounds(z_range)
     
     d = emitter_ndims(smld.emitters)
     if d == 3 || (d === nothing && isempty(smld.emitters))
