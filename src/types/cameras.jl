@@ -8,10 +8,15 @@ increasing, `N + 1` of them for `N` pixels, starting at the camera's top-left co
 Pixels need not be uniform. Constructors do not check that the edges increase from 0;
 `physical_to_pixel*` and the uniform-pixel formulas assume it, and the cameras' displays assume
 uniform pixels (they report the first pixel's width). A camera of a crop of the sensor is the
-exception: its edges start at the crop's corner in sensor µm, so `physical_to_pixel*` give
-sensor pixel numbers for it. [Pixels and coordinates](@ref) gives the convention.
+exception: its edges start at the crop's corner in sensor µm, so for uniform square pixels
+`physical_to_pixel*` give sensor pixel numbers for it. [Pixels and coordinates](@ref) gives the
+convention.
 """
 abstract type AbstractCamera end
+
+# Pixel counts must not be negative: `1:-1` would silently give a camera with no pixels.
+_check_count(nx, ny) = (nx >= 0 && ny >= 0) ||
+    throw(ArgumentError("a camera needs pixel counts of 0 or more, not ($nx, $ny)"))
 
 # Edges of `length(centers)` pixels of width `pixel_size` (µm), the first at 0, in the type of
 # `pixel_size`. `centers` numbers a whole sensor's pixels from 0 or from 1; any other start
@@ -70,8 +75,9 @@ end
 A camera with a regular pixel grid and Poisson noise only, defined by its pixel edges.
 
 # Fields
-- `pixel_edges_x::Vector{T}`: pixel edges in x (µm), from 0, one more than the number of pixels
-- `pixel_edges_y::Vector{T}`: pixel edges in y (µm), from 0, one more than the number of pixels
+- `pixel_edges_x::Vector{T}`: pixel edges in x (µm), one more than the number of pixels; from 0
+  for a whole sensor, from the crop's corner for a crop
+- `pixel_edges_y::Vector{T}`: pixel edges in y (µm), likewise
 
 Pixel `(x, y) = (col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm, where `Δx` and
 `Δy` are the pixel sizes; see [Pixels and coordinates](@ref).
@@ -127,12 +133,14 @@ function IdealCamera(pixel_centers_x::AbstractUnitRange,
 end
 
 function IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::T) where T<:Real
+    _check_count(n_pixels_x, n_pixels_y)
     pixel_centers_x = 1:n_pixels_x
     pixel_centers_y = 1:n_pixels_y
     return IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)
 end
 
 function IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::Tuple{T, T}) where T<:Real
+    _check_count(n_pixels_x, n_pixels_y)
     pixel_centers_x = 1:n_pixels_x
     pixel_centers_y = 1:n_pixels_y
     return IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)
@@ -246,8 +254,19 @@ const _SCMOSParam = Union{Real, AbstractMatrix{<:Real}}
 # (`nothing`) brings none.
 _camera_eltype(x::Real) = typeof(x)
 _camera_eltype(x::Tuple{Real, Real}) = promote_type(typeof(x[1]), typeof(x[2]))
-_camera_eltype(x::AbstractArray{<:Real}) = eltype(x)
+_camera_eltype(x::AbstractArray{<:Real}) = _number_type(eltype(x))
 _camera_eltype(::Nothing) = Union{}
+# An element type that is a union of number types (`Union{Float32,Float64}`) brings their
+# promotion.
+_number_type(T::Type) = T isa Union ? promote_type(Base.uniontypes(T)...) : T
+
+# Uniform edges `0, p, 2p, ..., n·p` in `T`: whole numbers exactly, with a check that each fits;
+# floats as a range, as in 0.1.0.
+function _uniform_edges(::Type{T}, n::Integer, p) where {T}
+    n >= 0 || throw(ArgumentError("a camera needs a pixel count of 0 or more, not $n"))
+    T <: Integer && return T[Base.checked_mul(convert(T, i), p) for i in 0:n]
+    return collect(T, range(zero(T), n * p, length = n + 1))
+end
 
 # A calibration value converted to the camera's `T`; `default` when not given.
 _camera_param(::Type{T}, x::Real, default) where {T} = convert(T, x)
@@ -271,9 +290,8 @@ function SCMOSCamera(
                      _camera_eltype(offset), _camera_eltype(gain), _camera_eltype(qe))
     px, py = _pixel_sizes(T, pixel_size)
     # In `T` itself, so whole-number pixel sizes give whole-number edges, as in 0.1.0
-    edges_x = collect(T, range(zero(T), nx * px, length=nx+1))
-    edges_y = collect(T, range(zero(T), ny * py, length=ny+1))
-    return _scmos_camera(T, edges_x, edges_y, readnoise, offset, gain, qe)
+    return _scmos_camera(T, _uniform_edges(T, nx, px), _uniform_edges(T, ny, py),
+                         readnoise, offset, gain, qe)
 end
 
 function SCMOSCamera(
@@ -294,6 +312,8 @@ end
 # Check the maps' sizes against the edges and build the camera in `T`.
 function _scmos_camera(::Type{T}, edges_x::Vector{T}, edges_y::Vector{T},
                        readnoise, offset, gain, qe) where {T}
+    (isempty(edges_x) || isempty(edges_y)) &&
+        throw(ArgumentError("a camera needs at least one pixel edge on each side (N + 1 for N pixels)"))
     nx = length(edges_x) - 1
     ny = length(edges_y) - 1
     _validate_camera_param(offset, nx, ny, "offset")

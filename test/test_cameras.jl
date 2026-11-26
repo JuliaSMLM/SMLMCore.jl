@@ -87,6 +87,14 @@ using SMLMCore, Test
         @test physical_to_pixel(big(1)//3, big(1)//4, big(1)//1) isa Tuple{Float64,Float64}
         @test physical_to_pixel(1, 2, 1//2) === (2.5, 4.5)
         @test physical_to_pixel(1//2, 1//4, 1) === (1.0, 0.75)
+        # The exact value, half included, rounded once to the nearest Float64, at any BigFloat
+        # precision
+        @test physical_to_pixel(1//3, 0//1, 1)[1] === 5 / 6
+        @test physical_to_pixel(-200//1, -200//1, 24//1)[1] === -47 / 6
+        @test physical_to_pixel(-1//2 + 1//2^60, 0//1, 1)[1] === 2.0^-60
+        @test setprecision(() -> physical_to_pixel(1//3, 0//1, 1)[1], BigFloat, 24) === 5 / 6
+        @test SMLMCore._nearest_float64(big(3) // big(2)^1075) === 2 * nextfloat(0.0)  # tie to even
+        @test SMLMCore._nearest_float64(big(2)^1100 // 1) === Inf
         # Other number types keep the quotient's type, as in 0.1.0
         @test physical_to_pixel(big(1.0), big(2.0), big(1.0)) isa Tuple{BigFloat,BigFloat}
         @test physical_to_pixel(big(1), big(2), big(1)) isa Tuple{BigFloat,BigFloat}
@@ -501,6 +509,18 @@ end
         @test SCMOSCamera(4, 2, (1, 2), 2).pixel_edges_y == [0, 2, 4]
         @test SCMOSCamera(4, 4, Int16(1), Int16(2)) isa SCMOSCamera{Int16}
         @test SCMOSCamera(4, 4, 1, 2; offset = 1.5) isa SCMOSCamera{Float64}
+        # Whole-number edges are exact, and an edge that does not fit throws
+        @test SCMOSCamera(2, 2, 2^53 + 1, 1).pixel_edges_x == [0, 2^53 + 1, 2 * (2^53 + 1)]
+        @test SCMOSCamera(3, 1, Int8(40), Int8(2)).pixel_edges_x == Int8[0, 40, 80, 120]
+        @test_throws OverflowError SCMOSCamera(2, 2, Int8(100), Int8(1))
+        # A union of float types promotes; counts below 0 and missing edges are refused
+        v = Union{Float32,Float64}[0f0, 1.0]
+        @test SCMOSCamera(v, v; readnoise = 1f0) isa SCMOSCamera{Float64}
+        @test SCMOSCamera(1, 1, 0.1, Union{Float32,Float64}[1f0;;]) isa SCMOSCamera{Float64}
+        @test_throws ArgumentError SCMOSCamera(-1, 2, 1, 1)
+        @test_throws ArgumentError SCMOSCamera(Float64[], [0.0, 1.0]; readnoise = 1.0)
+        @test_throws ArgumentError IdealCamera(-1, 2, 0.1)
+        @test_throws ArgumentError IdealCamera(2, -1, (0.1, 0.2))
 
         # The edges form promotes the same way, and takes any vector of edges
         ex32 = collect(range(0.0f0, 1.0f0, length = 11))

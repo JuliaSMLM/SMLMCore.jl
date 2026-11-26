@@ -48,17 +48,41 @@ julia> physical_to_pixel(0.05, 0.25, 0.1)
 """
 function physical_to_pixel(x::Real, y::Real, pixel_size::Real)
     # (0, 0) µm is the top-left corner of pixel (1, 1), at pixel coordinate (0.5, 0.5).
-    # The half is converted to the quotient's type so a Float32 input gives a Float32 result.
-    px = _pixel_quotient(x, pixel_size)
-    py = _pixel_quotient(y, pixel_size)
-    return (px + oftype(px, 0.5), py + oftype(py, 0.5))
+    return (_pixel_coordinate(x, pixel_size), _pixel_coordinate(y, pixel_size))
 end
 
-# `x / p`. With only Rationals and integers, the exact quotient (in BigInt, so it cannot
-# overflow) rounded to Float64: a Rational result could overflow when the half is added.
-_pixel_quotient(x::Real, p::Real) = x / p
-_pixel_quotient(x::Rational, p::Union{Integer,Rational}) = Float64(Rational{BigInt}(x) / p)
-_pixel_quotient(x::Integer, p::Rational) = Float64(Rational{BigInt}(x) / p)
+# `x / p + 1/2`. The half is converted to the quotient's type, so a Float32 input gives a Float32
+# result. With only Rationals and integers, the exact value (in BigInt, so nothing overflows)
+# rounded once to the nearest Float64.
+_pixel_coordinate(x::Real, p::Real) = (q = x / p; q + oftype(q, 0.5))
+_pixel_coordinate(x::Rational, p::Union{Integer,Rational}) =
+    _nearest_float64(Rational{BigInt}(x) / p + big(1) // 2)
+_pixel_coordinate(x::Integer, p::Rational) = _nearest_float64(Rational{BigInt}(x) / p + big(1) // 2)
+
+# The Float64 nearest `q` (ties to even), from integers alone, so it does not depend on
+# BigFloat's precision: m = n·2^s / d with 2^52 ≤ m < 2^53 (smaller below the normal range,
+# where s stops at 1074), rounded by its remainder.
+function _nearest_float64(q::Rational{BigInt})
+    n, d = abs(numerator(q)), denominator(q)
+    iszero(n) && return 0.0
+    s = 53 - (ndigits(n; base = 2) - ndigits(d; base = 2))
+    lo, hi = big(2)^52, big(2)^53
+    while true
+        s = min(s, 1074)
+        num, den = s >= 0 ? (n << s, d) : (n, d << -s)
+        m, r = divrem(num, den)
+        if m >= hi
+            s -= 1
+        elseif m < lo && s < 1074
+            s += 1
+        else
+            c = cmp(2r, den)
+            (c > 0 || (c == 0 && isodd(m))) && (m += 1)
+            x = ldexp(Float64(m), -s)
+            return numerator(q) < 0 ? -x : x
+        end
+    end
+end
 
 """
     physical_to_pixel_index(x, y, pixel_size) -> (px, py)
