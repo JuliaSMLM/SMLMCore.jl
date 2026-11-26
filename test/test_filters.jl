@@ -1,4 +1,5 @@
 using SMLMCore, Test
+using SMLMCore: @filter as @keep
 using Random: MersenneTwister
 
 @testset "Filtering" begin
@@ -818,4 +819,73 @@ end
     @test length(@filter(so, reduce(+, (1, 2)) == 3)) == 1
     @test length(@filter(so, map(in, (1,), ((1, 2),)) == (true,))) == 1
     @test length(@filter(so, in(1, (1, 2)))) == 1
+end
+
+# A getter that counts its reads
+mutable struct TickingEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    photons::Float64
+    n::Int
+end
+Base.getproperty(t::TickingEmitter, s::Symbol) =
+    s === :tick ? (setfield!(t, :n, getfield(t, :n) + 1); getfield(t, :n)) : getfield(t, s)
+# A caller that assigns a property's name after filtering (a captured local would be boxed)
+function _filter_then_assign(s)
+    r = @filter(s, photons > 1000)
+    photons = [e.photons for e in r.emitters]
+    return sum(photons)
+end
+function _filter_nested_global(s)
+    tmp = 11
+    @filter(s, begin tmp = 2; let; global tmp; end; true end)
+    return tmp
+end
+_filter_global_counter = 0
+
+@testset "@filter reads properties where reached, callers once" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+                   for (x, ph, f) in ((0.5, 900.0, 1), (1.5, 1100.0, 2), (-2.0, 1300.0, 3))], cam, 3, 1)
+    xs(r) = [e.x for e in r.emitters]
+    every = [0.5, 1.5, -2.0]
+
+    # A property is read only where the condition reaches it, as in 0.1.0
+    mixed = BasicSMLD(SMLMCore.AbstractEmitter[Emitter2D{Float64}(1.0, 1.0, 1.0),
+                                               Emitter3D{Float64}(2.0, 1.0, 0.5, 1000.0)], cam, 1, 1)
+    @test [e.x for e in @filter(mixed, photons > 100 && z > 0).emitters] == [2.0]
+    tk = BasicSMLD([TickingEmitter(1.0, 1.0, 1.0, 0)], cam, 1, 1)
+    @test length(@filter(tk, tick < tick)) == 1
+
+    # A caller variable is read once, outside the emitter function: no box in the caller
+    @test Base.return_types(_filter_then_assign, (typeof(s),)) == [Float64]
+    @test _filter_then_assign(s) == 2400.0
+
+    # e.x is the emitter's, except inside a construct that binds e
+    e = (x = -1.0,)
+    @test xs(@filter(s, e.x > 0 && all(e -> e > 0, (1, 2)))) == [0.5, 1.5]
+
+    # A catch variable is the condition's own, whatever its name
+    @test xs(@filter(s, try error("a"); catch err; err isa ErrorException end)) == every
+    # `end` in an index is not a name
+    @test xs(@filter(s, (x, frame)[end] == 2)) == [1.5]
+    # A name declared global in an inner scope leaves the condition's own binding alone
+    @test _filter_nested_global(s) == 11
+    # and a global the condition declares is the module's
+    @filter(s, begin global _filter_global_counter += 1; true end)
+    @test _filter_global_counter == 3
+
+    # A nested @filter keeps its own `$`, under any name it is imported as
+    t = BasicSMLD([Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1)
+    c = Ref(0)
+    r1 = xs(@filter(s, !isempty(@filter(t, x == $(c[] += 1)).emitters)))
+    @test c[] == 3
+    c[] = 0
+    @test xs(@filter(s, !isempty(@keep(t, x == $(c[] += 1)).emitters))) == r1
+    @test c[] == 3
+
+    # Types in argument lists are not names
+    @test xs(@filter(s, any((v::Float64) -> v > 0, (x,)))) == [0.5, 1.5]
+    @test xs(@filter(s, any(((v::T) where {T<:Real}) -> v > 1, (x,)))) == [1.5]
+    @test xs(@filter(s, any((::Float64) -> true, (x,)))) == every
 end
