@@ -1,5 +1,19 @@
 using SMLMCore, Test
 
+# A vector and a matrix indexed from 0, standing in for offset arrays
+struct ZeroBasedVector{T} <: AbstractVector{T}
+    v::Vector{T}
+end
+Base.size(z::ZeroBasedVector) = size(z.v)
+Base.axes(z::ZeroBasedVector) = (0:length(z.v)-1,)
+Base.getindex(z::ZeroBasedVector, i::Int) = z.v[i+1]
+struct ZeroBasedMatrix{T} <: AbstractMatrix{T}
+    m::Matrix{T}
+end
+Base.size(z::ZeroBasedMatrix) = size(z.m)
+Base.axes(z::ZeroBasedMatrix) = map(n -> 0:n-1, size(z.m))
+Base.getindex(z::ZeroBasedMatrix, i::Int, j::Int) = z.m[i+1, j+1]
+
 @testset "Coordinate Conversion" begin
     @testset "Basic Conversions" begin
         pixel_size = 0.1  # 100nm pixels
@@ -95,6 +109,8 @@ using SMLMCore, Test
         @test setprecision(() -> physical_to_pixel(1//3, 0//1, 1)[1], BigFloat, 24) === 5 / 6
         @test SMLMCore._nearest_float64(big(3) // big(2)^1075) === 2 * nextfloat(0.0)  # tie to even
         @test SMLMCore._nearest_float64(big(2)^1100 // 1) === Inf
+        @test physical_to_pixel(-200, 0, 24//1)[1] === -47 / 6               # integer over Rational
+        @test physical_to_pixel(1//0, -1//0, 1) === (Inf, -Inf)              # Rational infinities
         # Other number types keep the quotient's type, as in 0.1.0
         @test physical_to_pixel(big(1.0), big(2.0), big(1.0)) isa Tuple{BigFloat,BigFloat}
         @test physical_to_pixel(big(1), big(2), big(1)) isa Tuple{BigFloat,BigFloat}
@@ -521,6 +537,14 @@ end
         @test_throws ArgumentError SCMOSCamera(Float64[], [0.0, 1.0]; readnoise = 1.0)
         @test_throws ArgumentError IdealCamera(-1, 2, 0.1)
         @test_throws ArgumentError IdealCamera(2, -1, (0.1, 0.2))
+        # IdealCamera's whole-number edges are checked too
+        @test IdealCamera(3, 1, Int8(40)).pixel_edges_x == Int8[0, 40, 80, 120]
+        @test_throws OverflowError IdealCamera(4, 1, Int8(40))
+        @test_throws OverflowError IdealCamera(4096, 1, Int16(10))
+        # Edges and maps with other indices are taken in order
+        zv = ZeroBasedVector([0.0, 0.1, 0.2])
+        c = SCMOSCamera(zv, zv; readnoise = ZeroBasedMatrix(fill(1.5, 2, 2)))
+        @test c.pixel_edges_x == [0.0, 0.1, 0.2] && c.readnoise == fill(1.5, 2, 2)
 
         # The edges form promotes the same way, and takes any vector of edges
         ex32 = collect(range(0.0f0, 1.0f0, length = 11))

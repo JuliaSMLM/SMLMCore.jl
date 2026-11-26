@@ -28,15 +28,16 @@ function compute_edges_1d(centers::AbstractUnitRange, pixel_size::T) where T<:Re
         "pass the crop's pixel edges in µm: IdealCamera(pixel_edges_x, pixel_edges_y)"))
     n_centers = length(centers)
     edges = Vector{T}(undef, n_centers + 1)
-    
+
     # First edge starts at 0
     edges[1] = zero(T)
-    
-    # Each subsequent edge is one pixel_size further
+
+    # Each subsequent edge is one pixel_size further; whole-number edges are checked, so one that
+    # does not fit `T` throws instead of wrapping
     for i in 1:n_centers
-        edges[i + 1] = T(i) * pixel_size
+        edges[i + 1] = T <: Integer ? Base.checked_mul(T(i), pixel_size) : T(i) * pixel_size
     end
-    
+
     return edges
 end
 
@@ -263,14 +264,20 @@ _number_type(T::Type) = T isa Union ? promote_type(Base.uniontypes(T)...) : T
 # Uniform edges `0, p, 2p, ..., n·p` in `T`: whole numbers exactly, with a check that each fits;
 # floats as a range, as in 0.1.0.
 function _uniform_edges(::Type{T}, n::Integer, p) where {T}
-    n >= 0 || throw(ArgumentError("a camera needs a pixel count of 0 or more, not $n"))
     T <: Integer && return T[Base.checked_mul(convert(T, i), p) for i in 0:n]
     return collect(T, range(zero(T), n * p, length = n + 1))
 end
 
+# A vector or map as a `Vector{T}` or `Matrix{T}`, its values in order whatever its indices
+# (an offset array, say); one that already is one is kept as given.
+_as_vector(::Type{T}, v::Vector{T}) where {T} = v
+_as_vector(::Type{T}, v::AbstractVector) where {T} = copyto!(Vector{T}(undef, length(v)), v)
+_as_matrix(::Type{T}, m::Matrix{T}) where {T} = m
+_as_matrix(::Type{T}, m::AbstractMatrix) where {T} = copyto!(Matrix{T}(undef, size(m)), m)
+
 # A calibration value converted to the camera's `T`; `default` when not given.
 _camera_param(::Type{T}, x::Real, default) where {T} = convert(T, x)
-_camera_param(::Type{T}, x::AbstractMatrix{<:Real}, default) where {T} = convert(Matrix{T}, x)
+_camera_param(::Type{T}, x::AbstractMatrix{<:Real}, default) where {T} = _as_matrix(T, x)
 _camera_param(::Type{T}, ::Nothing, default) where {T} = convert(T, default)
 
 # Pixel size in x and y, in the camera's `T`.
@@ -288,6 +295,7 @@ function SCMOSCamera(
 )
     T = promote_type(_camera_eltype(pixel_size), _camera_eltype(readnoise),
                      _camera_eltype(offset), _camera_eltype(gain), _camera_eltype(qe))
+    _check_count(nx, ny)
     px, py = _pixel_sizes(T, pixel_size)
     # In `T` itself, so whole-number pixel sizes give whole-number edges, as in 0.1.0
     return _scmos_camera(T, _uniform_edges(T, nx, px), _uniform_edges(T, ny, py),
@@ -305,7 +313,7 @@ function SCMOSCamera(
     T = promote_type(_camera_eltype(pixel_edges_x), _camera_eltype(pixel_edges_y),
                      _camera_eltype(readnoise), _camera_eltype(offset), _camera_eltype(gain),
                      _camera_eltype(qe))
-    return _scmos_camera(T, convert(Vector{T}, pixel_edges_x), convert(Vector{T}, pixel_edges_y),
+    return _scmos_camera(T, _as_vector(T, pixel_edges_x), _as_vector(T, pixel_edges_y),
                          readnoise, offset, gain, qe)
 end
 

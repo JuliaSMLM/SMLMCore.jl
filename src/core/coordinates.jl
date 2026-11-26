@@ -35,10 +35,11 @@ square pixels of `pixel_size` µm at the sample with the camera's edges starting
 
 `px` is the column and `py` the row, 1-based, and `(1, 1)` is the center of the top-left pixel,
 so `px = x / pixel_size + 0.5`; the camera's corner, `(0, 0)` µm, is at `(0.5, 0.5)`. The result
-has the type of `x / pixel_size`, so Float32 inputs give Float32. When a `Rational` meets
-another `Rational` or an integer, the result is the `Float64` nearest the exact value, as in
-SMLMData 0.7.1. For the integer index of the pixel that holds a position, use
-[`physical_to_pixel_index`](@ref).
+has the type of `x / pixel_size`, so Float32 inputs give Float32 (a Float32 with a `Rational`
+too). When a `Rational` meets only another `Rational` or an integer, the result is a `Float64`,
+as in SMLMData 0.7.1: the `Float64` nearest the exact value, rounded once (0.7.1 rounded
+twice), and `Inf` or `-Inf` for a `Rational` infinity. For the integer index of the pixel that
+holds a position, use [`physical_to_pixel_index`](@ref).
 
 # Example
 ```jldoctest
@@ -65,6 +66,7 @@ _pixel_coordinate(x::Integer, p::Rational) = _nearest_float64(Rational{BigInt}(x
 function _nearest_float64(q::Rational{BigInt})
     n, d = abs(numerator(q)), denominator(q)
     iszero(n) && return 0.0
+    iszero(d) && return numerator(q) > 0 ? Inf : -Inf  # a Rational infinity, 1//0
     s = 53 - (ndigits(n; base = 2) - ndigits(d; base = 2))
     lo, hi = big(2)^52, big(2)^53
     while true
