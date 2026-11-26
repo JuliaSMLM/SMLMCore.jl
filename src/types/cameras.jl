@@ -7,8 +7,9 @@ A concrete camera type has the fields `pixel_edges_x` and `pixel_edges_y`: the p
 increasing, `N + 1` of them for `N` pixels, starting at the camera's top-left corner, `(0, 0)`.
 Pixels need not be uniform. Constructors do not check that the edges increase from 0;
 `physical_to_pixel*` and the uniform-pixel formulas assume it, and the cameras' displays assume
-uniform pixels (they report the first pixel's width).
-[Pixels and coordinates](@ref) gives the convention.
+uniform pixels (they report the first pixel's width). A camera of a crop of the sensor is the
+exception: its edges start at the crop's corner in sensor µm, so `physical_to_pixel*` give
+sensor pixel numbers for it. [Pixels and coordinates](@ref) gives the convention.
 """
 abstract type AbstractCamera end
 
@@ -138,39 +139,34 @@ function IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::Tuple
 end
 
 
+# For display: the pixel count along one side, the first pixel's width (cameras are shown as
+# uniform; `nothing` for a side with no pixels), the side's extent, and the pixel size as text.
+_shown_count(edges) = max(length(edges) - 1, 0)
+_shown_width(edges) = length(edges) < 2 ? nothing : round(edges[2] - edges[1], digits=4)
+_shown_extent(edges) = length(edges) < 2 ? 0 : round(edges[end] - edges[1], digits=2)
+function _shown_pixel_size(px, py, sep, none)
+    (px === nothing || py === nothing) && return none
+    return px ≈ py ? "$(px)$(sep)μm" : "$(px)$(sep)×$(sep)$(py)$(sep)μm"
+end
+
 # Standard show method (used in arrays and collections)
 function Base.show(io::IO, camera::IdealCamera{T}) where T
-    n_pixels_x = length(camera.pixel_edges_x) - 1
-    n_pixels_y = length(camera.pixel_edges_y) - 1
-    pixel_size_x = round(camera.pixel_edges_x[2] - camera.pixel_edges_x[1], digits=4)
-    pixel_size_y = round(camera.pixel_edges_y[2] - camera.pixel_edges_y[1], digits=4)
-    
-    if pixel_size_x ≈ pixel_size_y
-        print(io, "IdealCamera{$T}($(n_pixels_x)×$(n_pixels_y), $(pixel_size_x)μm)")
-    else
-        print(io, "IdealCamera{$T}($(n_pixels_x)×$(n_pixels_y), $(pixel_size_x)×$(pixel_size_y)μm)")
-    end
+    nx, ny = _shown_count(camera.pixel_edges_x), _shown_count(camera.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(camera.pixel_edges_x), _shown_width(camera.pixel_edges_y),
+                              "", "no pixels")
+    print(io, "IdealCamera{$T}($(nx)×$(ny), $(psize))")
 end
 
 # Detailed show method (used at REPL and when explicitly showing)
 function Base.show(io::IO, ::MIME"text/plain", camera::IdealCamera{T}) where T
-    n_pixels_x = length(camera.pixel_edges_x) - 1
-    n_pixels_y = length(camera.pixel_edges_y) - 1
-    pixel_size_x = round(camera.pixel_edges_x[2] - camera.pixel_edges_x[1], digits=4)
-    pixel_size_y = round(camera.pixel_edges_y[2] - camera.pixel_edges_y[1], digits=4)
-    
-    x_size = round(camera.pixel_edges_x[end] - camera.pixel_edges_x[1], digits=2)
-    y_size = round(camera.pixel_edges_y[end] - camera.pixel_edges_y[1], digits=2)
-    
+    nx, ny = _shown_count(camera.pixel_edges_x), _shown_count(camera.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(camera.pixel_edges_x), _shown_width(camera.pixel_edges_y),
+                              " ", "none (no pixels)")
+    x_size, y_size = _shown_extent(camera.pixel_edges_x), _shown_extent(camera.pixel_edges_y)
+
     println(io, "IdealCamera{$T} with:")
-    println(io, "  Dimensions: $(n_pixels_x) × $(n_pixels_y) pixels")
-    
-    if pixel_size_x ≈ pixel_size_y
-        println(io, "  Pixel size: $(pixel_size_x) μm")
-    else
-        println(io, "  Pixel size: $(pixel_size_x) × $(pixel_size_y) μm")
-    end
-    
+    println(io, "  Dimensions: $(nx) × $(ny) pixels")
+    println(io, "  Pixel size: $(psize)")
     print(io, "  Field of view: $(x_size) × $(y_size) μm")
 end
 
@@ -274,8 +270,9 @@ function SCMOSCamera(
     T = promote_type(_camera_eltype(pixel_size), _camera_eltype(readnoise),
                      _camera_eltype(offset), _camera_eltype(gain), _camera_eltype(qe))
     px, py = _pixel_sizes(T, pixel_size)
-    edges_x = collect(range(zero(T), nx * px, length=nx+1))
-    edges_y = collect(range(zero(T), ny * py, length=ny+1))
+    # In `T` itself, so whole-number pixel sizes give whole-number edges, as in 0.1.0
+    edges_x = collect(T, range(zero(T), nx * px, length=nx+1))
+    edges_y = collect(T, range(zero(T), ny * py, length=ny+1))
     return _scmos_camera(T, edges_x, edges_y, readnoise, offset, gain, qe)
 end
 
@@ -319,29 +316,20 @@ _validate_camera_param(param::Union{Real, Nothing}, nx, ny, name) = nothing
 
 # Display methods
 function Base.show(io::IO, cam::SCMOSCamera{T}) where T
-    nx = length(cam.pixel_edges_x) - 1
-    ny = length(cam.pixel_edges_y) - 1
-    px = round(cam.pixel_edges_x[2] - cam.pixel_edges_x[1], digits=4)
-    py = round(cam.pixel_edges_y[2] - cam.pixel_edges_y[1], digits=4)
-
-    psize_str = px ≈ py ? "$(px)μm" : "$(px)×$(py)μm"
-    print(io, "SCMOSCamera{$T}($(nx)×$(ny), $(psize_str))")
+    nx, ny = _shown_count(cam.pixel_edges_x), _shown_count(cam.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(cam.pixel_edges_x), _shown_width(cam.pixel_edges_y),
+                              "", "no pixels")
+    print(io, "SCMOSCamera{$T}($(nx)×$(ny), $(psize))")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", cam::SCMOSCamera{T}) where T
-    nx = length(cam.pixel_edges_x) - 1
-    ny = length(cam.pixel_edges_y) - 1
-    px = round(cam.pixel_edges_x[2] - cam.pixel_edges_x[1], digits=4)
-    py = round(cam.pixel_edges_y[2] - cam.pixel_edges_y[1], digits=4)
+    nx, ny = _shown_count(cam.pixel_edges_x), _shown_count(cam.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(cam.pixel_edges_x), _shown_width(cam.pixel_edges_y),
+                              " ", "none (no pixels)")
 
     println(io, "SCMOSCamera{$T} with:")
     println(io, "  Dimensions: $(nx) × $(ny) pixels")
-
-    if px ≈ py
-        println(io, "  Pixel size: $(px) μm")
-    else
-        println(io, "  Pixel size: $(px) × $(py) μm")
-    end
+    println(io, "  Pixel size: $(psize)")
 
     # Show parameter types (scalar vs matrix)
     offset_type = cam.offset isa T ? "uniform" : "per-pixel"

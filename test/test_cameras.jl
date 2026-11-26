@@ -81,7 +81,17 @@ using SMLMCore, Test
         @test physical_to_pixel(1//3, 2//3, 1//1) isa Tuple{Float64,Float64}
         @test all(physical_to_pixel(1//3, 2//3, 1//1) .≈ (5 / 6, 7 / 6))
         @test physical_to_pixel(1//typemax(Int), 2//3, 1//1)[1] ≈ 0.5
+        # The quotient itself must not overflow either, and a Rational{BigInt} gives Float64
+        @test physical_to_pixel(1//typemax(Int), 1//1, 2//1) == (0.5, 1.0)
+        @test physical_to_pixel(1//typemax(Int), 1//3, 2//3) == (0.5, 1.0)
+        @test physical_to_pixel(big(1)//3, big(1)//4, big(1)//1) isa Tuple{Float64,Float64}
+        @test physical_to_pixel(1, 2, 1//2) === (2.5, 4.5)
+        @test physical_to_pixel(1//2, 1//4, 1) === (1.0, 0.75)
+        # Other number types keep the quotient's type, as in 0.1.0
         @test physical_to_pixel(big(1.0), big(2.0), big(1.0)) isa Tuple{BigFloat,BigFloat}
+        @test physical_to_pixel(big(1), big(2), big(1)) isa Tuple{BigFloat,BigFloat}
+        @test physical_to_pixel(Float16(0.1), Float16(0.3), Float16(0.1)) isa Tuple{Float16,Float16}
+        @test physical_to_pixel(0.5f0, 1//2, 1//1) isa Tuple{Float32,Float64}
         @test physical_to_pixel(1, 2, 1) === (1.5, 2.5)
         # A Float32 position with a Float64 pixel size promotes as division does
         @test physical_to_pixel(0.05f0, 0.15f0, 0.1) isa Tuple{Float64,Float64}
@@ -226,7 +236,14 @@ end
     end
     @test IdealCamera(0:63, 0:31, (0.1, 0.2)).pixel_edges_y == IdealCamera(64, 32, (0.1, 0.2)).pixel_edges_y
     @test compute_bin_edges(0:2, 0:1, 0.5) == compute_bin_edges(1:3, 1:2, 0.5)
-    @test IdealCamera(0, 0, 0.1).pixel_edges_x == [0.0]   # no pixels: 1:0 starts at 1
+    empty = IdealCamera(0, 0, 0.1)                       # no pixels: 1:0 starts at 1
+    @test empty.pixel_edges_x == [0.0]
+    # and it displays (both displays read the second edge, which it lacks)
+    @test sprint(show, empty) == "IdealCamera{Float64}(0×0, no pixels)"
+    @test occursin("Pixel size: none", sprint(show, MIME("text/plain"), empty))
+    @test sprint(show, SCMOSCamera(0, 0, 0.1, 1.6)) == "SCMOSCamera{Float64}(0×0, no pixels)"
+    @test occursin("Dimensions: 0 × 0", sprint(show, MIME("text/plain"), SCMOSCamera(0, 0, 0.1, 1.6)))
+    @test sprint(show, IdealCamera(4, 2, (0.1, 0.2))) == "IdealCamera{Float64}(4×2, 0.1×0.2μm)"
 
     # Any other start was silently a camera at 0 µm; it is refused, in each axis and form
     @test_throws ArgumentError IdealCamera(101:200, 1:100, 0.1)
@@ -474,10 +491,16 @@ end
         @test SCMOSCamera(10, 10, (0.1f0, 0.2f0), 1.6f0) isa SCMOSCamera{Float32}
         @test @inferred(SCMOSCamera(64, 64, 0.1f0, 1.6f0; offset = 100)) isa SCMOSCamera{Float32}
 
-        # A call of one number type gives what 0.1.0 gave
+        # A call of one number type gives what 0.1.0 gave, whole numbers included
         c = SCMOSCamera(10, 10, 0.1, 1.6)
         @test c.offset === 0.0 && c.gain === 1.0 && c.qe === 1.0
         @test c.pixel_edges_x == collect(range(0.0, 10 * 0.1, length = 11))
+        c = SCMOSCamera(10, 10, 1, 2)
+        @test c isa SCMOSCamera{Int} && c.pixel_edges_x == collect(0:10) && c.readnoise === 2
+        @test c.offset === 0 && c.gain === 1 && c.qe === 1
+        @test SCMOSCamera(4, 2, (1, 2), 2).pixel_edges_y == [0, 2, 4]
+        @test SCMOSCamera(4, 4, Int16(1), Int16(2)) isa SCMOSCamera{Int16}
+        @test SCMOSCamera(4, 4, 1, 2; offset = 1.5) isa SCMOSCamera{Float64}
 
         # The edges form promotes the same way, and takes any vector of edges
         ex32 = collect(range(0.0f0, 1.0f0, length = 11))
