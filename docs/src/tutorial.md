@@ -52,15 +52,18 @@ precise = @filter(a, σ_x < 0.02 && photons > 1000)
 [(e.x, e.y) for e in precise.emitters]
 ```
 
-A condition holds only property names, number literals and tuples. A threshold held in a
-variable is read as a property, so filter the emitter vector directly instead:
+A name in the condition is an emitter property when the emitter has one of that name, and
+otherwise a variable or function where `@filter` is called, so a threshold can be held in a
+variable:
 
 ```@example tutorial
 threshold = 1000.0
-kept = filter(e -> e.photons > threshold, a.emitters)
-bright = BasicSMLD(kept, a.camera, a.n_frames, a.n_datasets, copy(a.metadata))
+bright = @filter(a, photons > threshold && abs(x - 1.0) ≤ 2.0)
 length(bright)
 ```
+
+A variable with the same name as a property is written `$name`:
+`@filter(a, frame == $frame)` keeps the emitters of the frame held in the variable `frame`.
 
 [`filter_frames`](@ref) selects frames, and [`filter_roi`](@ref) a region, with inclusive
 bounds in µm:

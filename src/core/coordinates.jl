@@ -34,9 +34,14 @@ Convert a position in µm to pixel coordinates, the inverse of [`pixel_to_physic
 square pixels of `pixel_size` µm at the sample with the camera's edges starting at 0.
 
 `px` is the column and `py` the row, 1-based, and `(1, 1)` is the center of the top-left pixel,
-so `px = x / pixel_size + 0.5`; the camera's corner, `(0, 0)` µm, is at `(0.5, 0.5)`. The result
-has the type of `x / pixel_size`, so Float32 inputs give Float32. For the integer index of the
-pixel that holds a position, use [`physical_to_pixel_index`](@ref).
+so `px = x / pixel_size + 0.5`; the camera's corner, `(0, 0)` µm, is at `(0.5, 0.5)`. Each
+coordinate is computed on its own. It has the type of `x / pixel_size` and is computed as
+`x / pixel_size + 0.5` in that type, as in 0.1.0 (Float32 inputs give Float32, `Int` inputs
+Float64, a `BigInt` BigFloat), except when the position or the pixel size is a `Rational` and
+the other is a `Rational` or an integer: then it is a `Float64`, as in SMLMData 0.7.1, the
+`Float64` nearest the exact value, rounded once (0.7.1 rounded twice), and `Inf` or `-Inf` for
+a `Rational` infinity. For the integer index of the pixel that holds a position, use
+[`physical_to_pixel_index`](@ref).
 
 # Example
 ```jldoctest
@@ -45,11 +50,42 @@ julia> physical_to_pixel(0.05, 0.25, 0.1)
 ```
 """
 function physical_to_pixel(x::Real, y::Real, pixel_size::Real)
-    # (0, 0) µm is the top-left corner of pixel (1, 1), at pixel coordinate (0.5, 0.5). The
-    # half is converted to the quotient's type so a Float32 input gives a Float32 result.
-    px = x / pixel_size
-    py = y / pixel_size
-    return (px + oftype(px, 0.5), py + oftype(py, 0.5))
+    # (0, 0) µm is the top-left corner of pixel (1, 1), at pixel coordinate (0.5, 0.5).
+    return (_pixel_coordinate(x, pixel_size), _pixel_coordinate(y, pixel_size))
+end
+
+# `x / p + 1/2`. The half is converted to the quotient's type, so a Float32 input gives a Float32
+# result. With only Rationals and integers, the exact value (in BigInt, so nothing overflows)
+# rounded once to the nearest Float64.
+_pixel_coordinate(x::Real, p::Real) = (q = x / p; q + oftype(q, 0.5))
+_pixel_coordinate(x::Rational, p::Union{Integer,Rational}) =
+    _nearest_float64(Rational{BigInt}(x) / p + big(1) // 2)
+_pixel_coordinate(x::Integer, p::Rational) = _nearest_float64(Rational{BigInt}(x) / p + big(1) // 2)
+
+# The Float64 nearest `q` (ties to even), from integers alone, so it does not depend on
+# BigFloat's precision: m = n·2^s / d with 2^52 ≤ m < 2^53 (smaller below the normal range,
+# where s stops at 1074), rounded by its remainder.
+function _nearest_float64(q::Rational{BigInt})
+    n, d = abs(numerator(q)), denominator(q)
+    iszero(n) && return 0.0
+    iszero(d) && return numerator(q) > 0 ? Inf : -Inf  # a Rational infinity, 1//0
+    s = 53 - (ndigits(n; base = 2) - ndigits(d; base = 2))
+    lo, hi = big(2)^52, big(2)^53
+    while true
+        s = min(s, 1074)
+        num, den = s >= 0 ? (n << s, d) : (n, d << -s)
+        m, r = divrem(num, den)
+        if m >= hi
+            s -= 1
+        elseif m < lo && s < 1074
+            s += 1
+        else
+            c = cmp(2r, den)
+            (c > 0 || (c == 0 && isodd(m))) && (m += 1)
+            x = ldexp(Float64(m), -s)
+            return numerator(q) < 0 ? -x : x
+        end
+    end
 end
 
 """

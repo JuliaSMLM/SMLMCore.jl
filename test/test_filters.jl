@@ -1,4 +1,5 @@
 using SMLMCore, Test
+using SMLMCore: @filter as @keep
 using Random: MersenneTwister
 
 @testset "Filtering" begin
@@ -557,4 +558,461 @@ _nd_alloc(v) = minimum(@allocated(emitter_ndims(v)) for _ in 1:5)
 
 
 
+end
+
+# A @filter condition may use the caller's variables and functions; 0.1.0 read every name in it
+# as an emitter field and threw for a variable, ≤, abs, ! or a range.
+@testset "@filter with names from the caller" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f, dataset = d)
+                   for (x, ph, f, d) in ((0.5, 900.0, 1, 1), (1.5, 1100.0, 2, 2), (-2.0, 1300.0, 3, 1))],
+                  cam, 3, 2, Dict{String,Any}("k" => 1))
+    xs(r) = [e.x for e in r.emitters]
+
+    thr = 1000.0
+    @test xs(@filter(s, photons > thr)) == [1.5, -2.0]
+    @test xs(@filter(s, x ≤ 1.0)) == [0.5, -2.0]
+    @test xs(@filter(s, x ≥ 1.0)) == [1.5]
+    @test xs(@filter(s, abs(x) < 1.0)) == [0.5]
+    @test xs(@filter(s, !(frame == 2))) == [0.5, -2.0]
+    @test xs(@filter(s, frame in 1:2)) == [0.5, 1.5]
+    @test xs(@filter(s, x + 1.0 > 2.0)) == [1.5]
+    @test xs(@filter(s, photons > thr && frame != 3)) == [1.5]
+    @test xs(@filter(s, x < Inf && photons < typemax(Float64))) == [0.5, 1.5, -2.0]
+    near(a; to) = abs(a - to) < 0.6
+    @test xs(@filter(s, near(x; to = 1.0))) == [0.5, 1.5]
+    @test xs(@filter(s, any(t -> photons > t, (1200.0, 1250.0)))) == [-2.0]
+
+    # A name that is both a property and a variable reads the property; $name is the variable
+    dataset = 2
+    @test xs(@filter(s, dataset == dataset)) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, dataset == $dataset)) == [1.5]
+    per_frame(s) = [length(@filter(s, frame == $f)) for f in 1:3]
+    @test per_frame(s) == [1, 1, 1]
+
+    # A name that is neither throws getproperty's error, naming it, when the condition runs
+    # (a FieldError from Julia 1.12, an ErrorException before), as 0.1.0 did
+    err = try
+        @filter(s, photons > not_defined_anywhere); nothing
+    catch ex
+        ex
+    end
+    @test err isa Exception && occursin("not_defined_anywhere", sprint(showerror, err))
+
+    # The data-set expression is evaluated once
+    calls = Ref(0)
+    get_s() = (calls[] += 1; s)
+    @filter(get_s(), photons > 0)
+    @test calls[] == 1
+
+    # The result is as before: same type, camera and counts, copied metadata, the input's emitters
+    r = @filter(s, photons > thr)
+    @test r isa typeof(s)
+    @test r.camera === s.camera && r.n_frames == 3 && r.n_datasets == 2
+    @test r.metadata == s.metadata && r.metadata !== s.metadata
+    @test r.emitters[1] === s.emitters[2]
+    @test @inferred(SMLMCore._filter_smld(s, e -> e.photons > 1000.0)) isa typeof(s)
+end
+
+# An emitter whose property `accept` holds a function, for the call-position rule
+struct AcceptTestEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    photons::Float64
+    accept::Function
+end
+_never(v) = false
+_lower_than(v; lo) = v < lo
+_filter_in_function(s, t) = (x_max = t; @filter(s, x < x_max && frame in 1:2))
+
+@testset "@filter: names the condition binds, calls, and 0.1.0 forms" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, sx, sx, 50.0, 2.0; frame = f, dataset = d)
+                   for (x, ph, f, d, sx) in ((0.5, 900.0, 1, 1, 0.01), (1.5, 1100.0, 2, 2, 0.03),
+                                             (-2.0, 1300.0, 3, 1, 0.01))],
+                  cam, 3, 2, Dict{String,Any}())
+    xs(r) = [e.x for e in r.emitters]
+
+    # A name bound by the condition is its own, even when it is also a property
+    @test xs(@filter(s, all(x -> x < 0.02, (σ_x, σ_y)))) == [0.5, -2.0]
+    @test xs(@filter(s, any(x > 1.0 for x in (0.0, 0.5)))) == Float64[]
+    @test xs(@filter(s, any(x > 5 for x in (10,)))) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, sum(v for v in (x, photons) if v > 1) > 1000)) == [1.5, -2.0]
+    @test xs(@filter(s, [x for x in (x,)][1] > 0)) == [0.5, 1.5]   # the iterator's x is the property
+    @test xs(@filter(s, let frame = 9; frame == 9 end)) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, let f = frame; f == 2 end)) == [1.5]
+    @test xs(@filter(s, begin y2 = 2x; y2 > 1.0 end)) == [1.5]
+
+    # Locals of the calling function, and `$name` there
+    @test xs(_filter_in_function(s, 1.0)) == [0.5]
+    g(s) = (frame = 2; @filter(s, frame == $frame))
+    @test xs(g(s)) == [1.5]
+
+    # The function called follows the same rule: the emitter's property, else the caller's;
+    # `$f` is always the caller's. Broadcast calls too.
+    sa = BasicSMLD([AcceptTestEmitter(1.0, 1.0, 1.0, v -> v > 0.5),
+                    AcceptTestEmitter(0.2, 1.0, 1.0, v -> v > 0.5)], cam, 1, 1)
+    accept = _never
+    @test length(@filter(sa, accept(x))) == 1
+    @test length(@filter(sa, $accept(x))) == 0
+    @test xs(@filter(s, abs.(x) .> 1.0)) == [1.5, -2.0]
+    @test xs(@filter(s, $abs(x) > 1.0)) == [1.5, -2.0]
+
+    # Macros, keyword names and the `; lo` shorthand, and quoted code are left as written
+    @test xs(@filter(s, @inbounds(x > 1.0))) == [1.5]
+    @test xs(@filter(s, occursin(r"^1", string(x)))) == [1.5]
+    lo = 1.0
+    @test xs(@filter(s, _lower_than(x; lo))) == [0.5, -2.0]
+    @test xs(@filter(s, _lower_than(x; lo = 0.0))) == [-2.0]
+    @test xs(@filter(s, only(isapprox.((x,), 1.5; atol = 0.1)))) == [1.5]
+    q = :(x + 1)
+    @test xs(@filter(s, q == :(x + 1))) == [0.5, 1.5, -2.0]
+
+    # 0.1.0 forms: e.name reads the emitter; a property computed by getproperty but not listed in
+    # propertynames is read when no variable of that name is defined
+    @test xs(@filter(s, e.x > 1)) == [1.5]
+    e = 7
+    @test xs(@filter(s, e.x > 1)) == [1.5]
+    d = BasicSMLD([DeclaredOnlyLoc{2,Float64}((0.5, 1.0), 1000.0, 1, 1, 0, 0),
+                   DeclaredOnlyLoc{2,Float64}((1.5, 1.0), 1000.0, 1, 1, 0, 0)], cam, 1, 1)
+    @test [p.x for p in (@filter(d, x > 1.0)).emitters] == [1.5]
+    @test_throws Exception @filter(s, no_such_name > 1)   # getproperty's error
+
+    # A number as the answer keeps by its truth, as in 0.1.0; it never selects by position
+    @test xs(@filter(s, 1)) == [0.5, 1.5, -2.0]
+    @test xs(@filter(s, 0)) == Float64[]
+    @test_throws InexactError @filter(s, frame)
+end
+
+@testset "filter_roi warns for ranges that may have lost their stop" begin
+    cam = IdealCamera(64, 64, 0.1)
+    xs = [0.2, 0.95, 1.0, 1.6, 1.8]
+    s2 = BasicSMLD([Emitter2D{Float64}(x, 1.0, 1000.0) for x in xs], cam, 1, 1)
+    s3 = BasicSMLD([Emitter3D{Float64}(x, 1.0, 0.5, 1000.0) for x in xs], cam, 1, 1)
+    getx(r) = [e.x for e in r.emitters]
+    warned = (:warn, r"filter_roi takes the range .* as the bounds .*Pass the bounds as a tuple")
+
+    # Tuples, vectors and whole numbers in steps of 1 end where written: no warning
+    r = @test_logs filter_roi(s2, (0.5, 1.7), (0.0, 2.0))
+    @test getx(r) == [0.95, 1.0, 1.6]
+    @test_logs filter_roi(s2, [0.5, 1.7], [0.0, 2.0])
+    @test_logs filter_roi(s2, 0:2, 0:2)
+    @test_logs filter_roi(s2, Base.OneTo(2), 0:2)
+    @test_logs filter_roi(s2, 0:1:2, 2:-1:0)                    # step 1 written out, or -1
+    @test_logs filter_roi(s2, 0:2, UnitRange(0, 2))
+    @test_logs filter_roi(s3, (0.0, 2.0), (0.0, 2.0), (0.0, 1.0))
+
+    # Any other range warns; the bounds and so the result are those of 0.1.0
+    r = @test_logs warned filter_roi(s2, 0.0:0.3:1.0, (0.0, 2.0))
+    @test getx(r) == [0.2]                         # the range ends at 0.9, not at 1.0
+    @test_logs (:warn, r"as the bounds 0\.0 to 0\.9") filter_roi(s2, 0.0:0.3:1.0, (0.0, 2.0))
+    r = @test_logs warned filter_roi(s2, 0.5:1.7, (0.0, 2.0))
+    @test getx(r) == [0.95, 1.0]                   # 0.5:1.7 is 0.5:1.5
+    @test getx(@test_logs warned filter_roi(s2, 0.0:2.0, 1.0:3.0)) == xs
+    @test_logs warned filter_roi(s2, 0:2:8, (0.0, 2.0))       # integer steps of 2 may skip a stop
+    @test_logs warned filter_roi(s2, (0.0, 2.0), 0.0:2.0)
+    @test_logs warned filter_roi(s3, (0.0, 2.0), (0.0, 2.0), 0.0:0.5:1.0)
+    @test_logs warned filter_roi(s3, 0.0:2.0, (0.0, 2.0), (0.0, 1.0))
+    @test_logs warned filter_roi(s2, 2.0:-1.0:0.0, (0.0, 2.0))   # descending: bounds 0 to 2
+
+    # Once per logger: two ranges in one call, then a second call, give one warning
+    @test_logs warned begin
+        filter_roi(s2, 0.0:2.0, 1.0:3.0)
+        filter_roi(s3, 0.0:2.0, 0.0:2.0, 0.0:1.0)
+    end
+end
+
+# A condition's assignments must not reach the caller's locals
+function _filter_assigns(s)
+    y2 = 100.0
+    @filter(s, begin y2 = 2x; y2 > 1.0 end)
+    return y2
+end
+function _filter_loop_assigns(s)
+    t = 0
+    @filter(s, begin for i in 1:2; t = frame; end; true end)
+    return t
+end
+
+# Emitters with properties named like operators
+struct OperatorNamedEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    photons::Float64
+    var"in"::Function
+    var"+"::Function
+end
+function _filter_nested_local(s)
+    tmp = 11
+    @filter(s, begin tmp = 2; let; local tmp = 8; end; true end)
+    return tmp
+end
+function _filter_let_shadow(s)
+    cutoff = 2
+    return [e.x for e in @filter(s, begin let cutoff = 0; cutoff += 1; end; x <= cutoff end).emitters]
+end
+
+@testset "@filter follows Julia's scope rules" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+                   for (x, ph, f) in ((0.5, 900.0, 1), (1.5, 1100.0, 2), (-2.0, 1300.0, 3))], cam, 3, 1)
+    xs(r) = [e.x for e in r.emitters]
+    every = [0.5, 1.5, -2.0]
+
+    # Loops, local declarations, functions it defines, catch, assignments inside if, while
+    @test xs(@filter(s, begin acc = 0.0; for x in (1.0, 2.0); acc += x; end; acc > 2.5 end)) == every
+    @test xs(@filter(s, begin local x = 10; x > 5 end)) == every
+    @test xs(@filter(s, begin f(x) = x > 5; f(10) end)) == every
+    @test xs(@filter(s, begin function g(x) x > 5 end; g(10) end)) == every
+    @test xs(@filter(s, try error("a"); catch x; x isa ErrorException end)) == every
+    @test xs(@filter(s, begin if true; x = 10; end; x > 5 end)) == every
+    @test xs(@filter(s, begin y = 0; for x in (10,); y = x; end; y > 5 end)) == every
+    @test xs(@filter(s, begin i = 0; while i < 3; i += 1; end; i == 3 end)) == every
+    # The loop body assigns the condition's own x, as Julia's rules say for an enclosing local
+    @test xs(@filter(s, begin for i in 1:1; x = 10; end; x > 1.0 end)) == every
+    @test xs(@filter(s, begin n = 0; for frame in 3:4, j in 1:frame; n += 1; end; n == 7 end)) == every
+    @test xs(@filter(s, begin i = 0; while (x = i; x < 1); i += 1; end; i == 1 end)) == every
+    @test xs(@filter(s, any(i for i in (true,) if (x = 10; x > 5)))) == every
+    @test xs(@filter(s, let f(x) = x > 5; f(10) end)) == every
+    @test xs(@filter(s, begin f(x)::Bool = x > 5; f(10) end)) == every
+    @test xs(@filter(s, begin function h(x)::Bool; x > 5; end; h(10) end)) == every
+    @test xs(@filter(s, begin f(t = x) = t > 1; f() end)) == [1.5]
+    @test xs(@filter(s, let a = falses(3); a[frame] = true; a[2] end)) == [1.5]
+    counts = zeros(Int, 3)
+    @test xs(@filter(s, (counts[frame] += 1) <= 1)) == every
+    @test counts == [1, 1, 1]
+    @test _filter_nested_local(s) == 11
+    @test _filter_let_shadow(s) == every
+
+    # The caller's variables are not written
+    @test _filter_assigns(s) == 100.0
+    @test _filter_loop_assigns(s) == 0
+
+    # `$expr` is the caller's value, whatever the condition binds
+    x = 7
+    @test xs(@filter(s, any(x -> x == $x, (4,)))) == Float64[]
+    @test xs(@filter(s, any(x -> x == $x, (7,)))) == every
+    f = _ -> false
+    @test xs(@filter(s, let f = _ -> true; $f(x) end)) == Float64[]
+    calls = Ref(0)
+    count_call() = (calls[] += 1; 1.0)
+    @filter(s, x > $(count_call()))
+    @test calls[] == 1                                        # evaluated once
+    @filter(s, @inbounds x > $(count_call()))
+    @test calls[] == 2                                        # inside another macro too
+    @test xs(@filter(s, any(x -> @inbounds(x == $x), (4,)))) == Float64[]
+
+    # Macros expand first: a nested @filter has its own emitters; @isdefined sees the caller
+    t = BasicSMLD([Emitter2DFit{Float64}(9.0, 1.0, 1.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1)
+    @test xs(@filter(s, !isempty((@filter(t, x > 5)).emitters))) == every
+    @test xs(@filter(s, length(@filter(s, frame == 2)) == 1)) == every
+    @test xs(@filter(s, @isdefined(no_such_thing) || x > 1)) == [1.5]
+    # a free name in the nested condition follows the outer one: the outer emitter's frame
+    t2 = BasicSMLD([Emitter2D{Float64}(9.0, 1.0, 1.0)], cam, 1, 1)
+    frame = 2
+    @test xs(@filter(s, length(@filter(t2, frame == 2)) == 1)) == [1.5]
+
+    # Operators passed as values keep their meaning, even beside a property of that name
+    @test xs(@filter(s, all((.>)([x], 0)))) == [0.5, 1.5]
+    @test xs(@filter(s, reduce(+, (1, 2)) == 3)) == every
+    so = BasicSMLD([OperatorNamedEmitter(1.0, 1.0, 1.0, (a...) -> 42, (a...) -> 42)], cam, 1, 1)
+    @test length(@filter(so, reduce(+, (1, 2)) == 3)) == 1
+    @test length(@filter(so, map(in, (1,), ((1, 2),)) == (true,))) == 1
+    @test length(@filter(so, in(1, (1, 2)))) == 1
+end
+
+# A getter that counts its reads
+mutable struct TickingEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    photons::Float64
+    n::Int
+end
+Base.getproperty(t::TickingEmitter, s::Symbol) =
+    s === :tick ? (setfield!(t, :n, getfield(t, :n) + 1); getfield(t, :n)) : getfield(t, s)
+# A caller that assigns a property's name after filtering (a captured local would be boxed)
+function _filter_then_assign(s)
+    r = @filter(s, photons > 1000)
+    photons = [e.photons for e in r.emitters]
+    return sum(photons)
+end
+function _filter_nested_global(s)
+    tmp = 11
+    @filter(s, begin tmp = 2; let; global tmp; end; true end)
+    return tmp
+end
+_filter_global_counter = 0
+
+@testset "@filter reads properties where reached, callers once" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+                   for (x, ph, f) in ((0.5, 900.0, 1), (1.5, 1100.0, 2), (-2.0, 1300.0, 3))], cam, 3, 1)
+    xs(r) = [e.x for e in r.emitters]
+    every = [0.5, 1.5, -2.0]
+
+    # A property is read only where the condition reaches it, as in 0.1.0
+    mixed = BasicSMLD(SMLMCore.AbstractEmitter[Emitter2D{Float64}(1.0, 1.0, 1.0),
+                                               Emitter3D{Float64}(2.0, 1.0, 0.5, 1000.0)], cam, 1, 1)
+    @test [e.x for e in @filter(mixed, photons > 100 && z > 0).emitters] == [2.0]
+    tk = BasicSMLD([TickingEmitter(1.0, 1.0, 1.0, 0)], cam, 1, 1)
+    @test length(@filter(tk, tick < tick)) == 1
+
+    # A caller variable is read once, outside the emitter function: no box in the caller
+    @test Base.return_types(_filter_then_assign, (typeof(s),)) == [Float64]
+    @test _filter_then_assign(s) == 2400.0
+
+    # e.x is the emitter's, except inside a construct that binds e
+    e = (x = -1.0,)
+    @test xs(@filter(s, e.x > 0 && all(e -> e > 0, (1, 2)))) == [0.5, 1.5]
+
+    # A catch variable is the condition's own, whatever its name
+    @test xs(@filter(s, try error("a"); catch err; err isa ErrorException end)) == every
+    # `end` in an index is not a name
+    @test xs(@filter(s, (x, frame)[end] == 2)) == [1.5]
+    # A name declared global in an inner scope leaves the condition's own binding alone
+    @test _filter_nested_global(s) == 11
+    # and a global the condition declares is the module's
+    @filter(s, begin global _filter_global_counter += 1; true end)
+    @test _filter_global_counter == 3
+
+    # A nested @filter keeps its own `$`, under any name it is imported as
+    t = BasicSMLD([Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1)
+    c = Ref(0)
+    r1 = xs(@filter(s, !isempty(@filter(t, x == $(c[] += 1)).emitters)))
+    @test c[] == 3
+    c[] = 0
+    @test xs(@filter(s, !isempty(@keep(t, x == $(c[] += 1)).emitters))) == r1
+    @test c[] == 3
+
+    # Types in argument lists are not names
+    @test xs(@filter(s, any((v::Float64) -> v > 0, (x,)))) == [0.5, 1.5]
+    @test xs(@filter(s, any(((v::T) where {T<:Real}) -> v > 1, (x,)))) == [1.5]
+    @test xs(@filter(s, any((::Float64) -> true, (x,)))) == every
+end
+
+_filter_threshold = 0.0
+@testset "@filter evaluates the data set first, and keeps each binding in its scope" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, 1000.0, 5.0, 0.01, 0.01, 50.0, 2.0)
+                   for x in (1.0, 2.0)], cam, 1, 1)
+    xs(r) = [e.x for e in r.emitters]
+
+    # `e` bound by a generator, a `let` or a `catch` is that construct's own, only inside it
+    e = (x = -1.0,)
+    neighbors = [(x = 2.0,)]
+    @test xs(@filter(s, e.x > 0 && any(e.x > 0 for e in neighbors))) == [1.0, 2.0]
+    @test xs(@filter(s, e.x > 0 && let e = (x = 2.0,); e.x > 0 end)) == [1.0, 2.0]
+    @test xs(@filter(s, try e.x > 0 catch e; false end)) == [1.0, 2.0]
+
+    # A callback's `where T` is its own in its body
+    tiny = BasicSMLD([Emitter2DFit{Float64}(1e-8, 1.0, 1000.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1)
+    @test length(@filter(tiny, any(((v::T) where T) -> v > eps(T), (x,)))) == 1
+    T = Float32
+    @test length(@filter(tiny, any(((v::T) where T) -> v > eps(T), (x,)))) == 1
+
+    # The data set is evaluated before the caller's variables and `$expr` are read
+    next_s() = (global _filter_threshold = 150.0;
+                BasicSMLD([Emitter2DFit{Float64}(1.0, 1.0, 101.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1))
+    @test isempty(@filter(next_s(), photons > _filter_threshold).emitters)
+    global _filter_threshold = 0.0
+    @test isempty(@filter(next_s(), photons > $(_filter_threshold)).emitters)
+end
+
+bright_emitter(em) = em.photons > 1000
+_filter_gg = 2
+@testset "@filter: e is the emitter wherever the condition does not bind it" begin
+    cam = IdealCamera(64, 64, 0.1)
+    ems = [Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+           for (x, ph, f) in ((0.5, 500.0, 1), (1.5, 1500.0, 2), (2.5, 2500.0, 3))]
+    s = BasicSMLD(ems, cam, 3, 1)
+    xs(r) = [e.x for e in r.emitters]
+    ref = BasicSMLD(ems[2:3], cam, 3, 1)
+    want = [1.5, 2.5]
+
+    # `e` bound by a lambda, generator, comprehension, loop, `let` or `catch` is its own inside;
+    # outside, `e` is the emitter, whatever caller `e` is defined
+    for caller_e in (nothing, ems[3], ems[1])
+        e = caller_e
+        @test xs(@filter(s, e.photons > 0.5 * maximum(e.photons for e in ems))) == want
+        @test xs(@filter(s, e.frame in [e.frame for e in ref.emitters])) == want
+        @test xs(@filter(s, begin n = 0; for e in ems; n += e.x > 2; end; n == 1 && e.x > 1 end)) == want
+        @test xs(@filter(s, let e = ems[1]; e.x < 1 end && e.x > 1)) == want
+        @test xs(@filter(s, any(e -> e.x > 2, ems) && e.x > 1)) == want
+        # (`catch e` assigns an enclosing `e`, as in Julia, so read `e.x` first)
+        @test xs(@filter(s, e.x > 1 && try error("no") catch e; e isa ErrorException end)) == want
+        # a bare `e` is the emitter too
+        @test xs(@filter(s, e.x > 1 && bright_emitter(e))) == want
+        # the iterator and a `let` value are outside the construct's `e`
+        @test xs(@filter(s, any(e > 1 for e in (e.x,)))) == want
+        @test xs(@filter(s, let e = e.x; e > 1 end)) == want
+        # an assignment to `e` changes `e` from there on, as in Julia
+        @test xs(@filter(s, e.x > 1 && (e = 3; e == 3))) == want
+        @test xs(@filter(s, begin e = (x = 9,); e.x > 1 end)) == [0.5, 1.5, 2.5]
+        # `$e` is the caller's
+        caller_e === nothing || @test length(@filter(s, x == $e.x)) == 1
+    end
+
+    # A condition written as an assignment is refused when the macro expands
+    @test_throws ArgumentError macroexpand(@__MODULE__, :(@filter(s, dataset = 1)))
+    @test all(em -> em.dataset == 1, ems)
+
+    # Positions that are not names stay as written
+    atol = 0.6
+    @test xs(@filter(s, isapprox(x, 1.0; atol = atol))) == [0.5, 1.5]
+    @test xs(@filter(s, (photons = photons, x = x).photons > 1000)) == want
+    @test xs(@filter(s, @isdefined(x) && x > 1)) == want
+    @test xs(@filter(s, any((v::Float64) -> v > Float64(1), (x,)))) == want
+    @test xs(@filter(s, x isa Real && any(((v::T) where {T<:Real}) -> v > 1, (x,)))) == want
+    @test xs(@filter(s, ((@nospecialize(v)) -> v > 1)(x))) == want
+    @test xs(@filter(s, begin global _filter_gg; frame < _filter_gg end)) == [0.5]
+    zz = 5
+    @test xs(@filter(s, begin for outer zz in 1:2; end; x > zz - 1 end)) == want
+    @test zz == 5
+    @test xs(@filter(s, begin f(v::T) where {T} = v > zero(T); f(x - 1) end)) == want
+end
+
+@testset "@filter: where in a type, assignment in a block, named-tuple shorthand" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2D{Float64}(x, 1.0, 1000.0) for x in (1.0, 2.0)], cam, 1, 1)
+    xs(r) = [e.x for e in r.emitters]
+
+    # A `where` in a type is that type's own parameter
+    @test xs(@filter(s, e isa (Emitter2D{T} where T<:AbstractFloat))) == [1.0, 2.0]
+    T = Float32
+    @test xs(@filter(s, e isa (Emitter2D{T} where T<:AbstractFloat))) == [1.0, 2.0]
+
+    # A condition whose value is an assignment is refused, inside a block or `@inbounds` too
+    @test_throws ArgumentError macroexpand(@__MODULE__, :(@filter(s, begin dataset = 1 end)))
+    @test_throws ArgumentError macroexpand(@__MODULE__, :(@filter(s, @inbounds dataset = 1)))
+
+    # A bare name in a named tuple keeps its entry name
+    @test xs(@filter(s, (x, y = y).x < 2)) == [1.0]
+    @test xs(@filter(s, (; x, y = y).x < 2)) == [1.0]
+end
+
+mutable struct EllipticEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    e::Float64
+end
+@testset "@filter: where in a value, a property named e, a name only in @isdefined" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2D{Float64}(x, 1.0, 1000.0) for x in (1.0, 2.0)], cam, 1, 1)
+    xs(r) = [e.x for e in r.emitters]
+    @test xs(@filter(s, (x, y) isa (Tuple{T,T} where T))) == [1.0, 2.0]
+    T = Int
+    @test xs(@filter(s, (x, y) isa (Tuple{T,T} where T))) == [1.0, 2.0]
+
+    # a bare `e` is the emitter even when it has a property named `e`; `e.e` reads that
+    se = BasicSMLD([EllipticEmitter(1.0, 1.0, 1.0), EllipticEmitter(2.0, 1.0, 0.0)], cam, 1, 1)
+    @test xs(@filter(se, e.e == 1)) == [1.0]
+    @test xs(@filter(se, e isa EllipticEmitter && x > 1)) == [2.0]
+
+    # a name that appears only in `@isdefined` is read as any other
+    only_here = 1
+    @test xs(@filter(s, @isdefined(only_here))) == [1.0, 2.0]
+    @test isempty(@filter(s, @isdefined(not_defined_anywhere_q)).emitters)
+
+    # `let q` with no value binds `q` in its body
+    @test xs(@filter(s, let q; q = x; q > 1 end)) == [2.0]
 end

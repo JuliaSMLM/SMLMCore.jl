@@ -1,5 +1,19 @@
 using SMLMCore, Test
 
+# A vector and a matrix indexed from 0, standing in for offset arrays
+struct ZeroBasedVector{T} <: AbstractVector{T}
+    v::Vector{T}
+end
+Base.size(z::ZeroBasedVector) = size(z.v)
+Base.axes(z::ZeroBasedVector) = (0:length(z.v)-1,)
+Base.getindex(z::ZeroBasedVector, i::Int) = z.v[i+1]
+struct ZeroBasedMatrix{T} <: AbstractMatrix{T}
+    m::Matrix{T}
+end
+Base.size(z::ZeroBasedMatrix) = size(z.m)
+Base.axes(z::ZeroBasedMatrix) = map(n -> 0:n-1, size(z.m))
+Base.getindex(z::ZeroBasedMatrix, i::Int, j::Int) = z.m[i+1, j+1]
+
 @testset "Coordinate Conversion" begin
     @testset "Basic Conversions" begin
         pixel_size = 0.1  # 100nm pixels
@@ -76,6 +90,33 @@ using SMLMCore, Test
         @test px isa Float32 && py isa Float32
         @test px ≈ 1.0f0 && py ≈ 2.0f0
         @test physical_to_pixel(0.05, 0.15, 0.1) isa Tuple{Float64,Float64}
+        # Rational inputs give Float64, as in SMLMData 0.7.1; they gave Rationals, which can
+        # overflow (1//typemax(Int) + 1//2 threw an OverflowError)
+        @test physical_to_pixel(1//3, 2//3, 1//1) isa Tuple{Float64,Float64}
+        @test all(physical_to_pixel(1//3, 2//3, 1//1) .≈ (5 / 6, 7 / 6))
+        @test physical_to_pixel(1//typemax(Int), 2//3, 1//1)[1] ≈ 0.5
+        # The quotient itself must not overflow either, and a Rational{BigInt} gives Float64
+        @test physical_to_pixel(1//typemax(Int), 1//1, 2//1) == (0.5, 1.0)
+        @test physical_to_pixel(1//typemax(Int), 1//3, 2//3) == (0.5, 1.0)
+        @test physical_to_pixel(big(1)//3, big(1)//4, big(1)//1) isa Tuple{Float64,Float64}
+        @test physical_to_pixel(1, 2, 1//2) === (2.5, 4.5)
+        @test physical_to_pixel(1//2, 1//4, 1) === (1.0, 0.75)
+        # The exact value, half included, rounded once to the nearest Float64, at any BigFloat
+        # precision
+        @test physical_to_pixel(1//3, 0//1, 1)[1] === 5 / 6
+        @test physical_to_pixel(-200//1, -200//1, 24//1)[1] === -47 / 6
+        @test physical_to_pixel(-1//2 + 1//2^60, 0//1, 1)[1] === 2.0^-60
+        @test setprecision(() -> physical_to_pixel(1//3, 0//1, 1)[1], BigFloat, 24) === 5 / 6
+        @test SMLMCore._nearest_float64(big(3) // big(2)^1075) === 2 * nextfloat(0.0)  # tie to even
+        @test SMLMCore._nearest_float64(big(2)^1100 // 1) === Inf
+        @test physical_to_pixel(-200, 0, 24//1)[1] === -47 / 6               # integer over Rational
+        @test physical_to_pixel(1//0, -1//0, 1) === (Inf, -Inf)              # Rational infinities
+        # Other number types keep the quotient's type, as in 0.1.0
+        @test physical_to_pixel(big(1.0), big(2.0), big(1.0)) isa Tuple{BigFloat,BigFloat}
+        @test physical_to_pixel(big(1), big(2), big(1)) isa Tuple{BigFloat,BigFloat}
+        @test physical_to_pixel(Float16(0.1), Float16(0.3), Float16(0.1)) isa Tuple{Float16,Float16}
+        @test physical_to_pixel(0.5f0, 1//2, 1//1) isa Tuple{Float32,Float64}
+        @test physical_to_pixel(1, 2, 1) === (1.5, 2.5)
         # A Float32 position with a Float64 pixel size promotes as division does
         @test physical_to_pixel(0.05f0, 0.15f0, 0.1) isa Tuple{Float64,Float64}
     end
@@ -207,6 +248,48 @@ end
         @test edges_x[end] - edges_x[1] ≈ 0.3
         @test edges_y[end] - edges_y[1] ≈ 0.6
     end
+end
+
+@testset "Pixel ranges number the whole sensor from 0 or 1" begin
+    # A range from 0 or 1 is the whole sensor, edges from 0 µm, as in 0.1.0
+    ref = IdealCamera(64, 32, 0.1)
+    for (rx, ry) in ((1:64, 1:32), (0:63, 0:31), (Base.OneTo(64), Base.OneTo(32)), (0:63, 1:32))
+        cam = IdealCamera(rx, ry, 0.1)
+        @test cam.pixel_edges_x == ref.pixel_edges_x
+        @test cam.pixel_edges_y == ref.pixel_edges_y
+    end
+    @test IdealCamera(0:63, 0:31, (0.1, 0.2)).pixel_edges_y == IdealCamera(64, 32, (0.1, 0.2)).pixel_edges_y
+    @test compute_bin_edges(0:2, 0:1, 0.5) == compute_bin_edges(1:3, 1:2, 0.5)
+    empty = IdealCamera(0, 0, 0.1)                       # no pixels: 1:0 starts at 1
+    @test empty.pixel_edges_x == [0.0]
+    # and it displays (both displays read the second edge, which it lacks)
+    @test sprint(show, empty) == "IdealCamera{Float64}(0×0, no pixels)"
+    @test occursin("Pixel size: none", sprint(show, MIME("text/plain"), empty))
+    @test sprint(show, SCMOSCamera(0, 0, 0.1, 1.6)) == "SCMOSCamera{Float64}(0×0, no pixels)"
+    @test occursin("Dimensions: 0 × 0", sprint(show, MIME("text/plain"), SCMOSCamera(0, 0, 0.1, 1.6)))
+    @test sprint(show, IdealCamera(4, 2, (0.1, 0.2))) == "IdealCamera{Float64}(4×2, 0.1×0.2μm)"
+
+    # Any other start was silently a camera at 0 µm; it is refused, in each axis and form
+    @test_throws ArgumentError IdealCamera(101:200, 1:100, 0.1)
+    @test_throws ArgumentError IdealCamera(1:100, 101:200, 0.1)
+    @test_throws ArgumentError IdealCamera(2:65, 1:64, (0.1, 0.2))
+    @test_throws ArgumentError IdealCamera(-1:62, 0:63, 0.1)
+    @test_throws ArgumentError compute_bin_edges(65:128, 1:128, 0.12)
+    @test_throws ArgumentError compute_bin_edges(1:3, 3:5, (0.1, 0.2))
+    err = try
+        IdealCamera(101:200, 1:100, 0.1); nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("101:200", err.msg)
+    @test occursin("cropped camera", err.msg)
+    @test occursin("pixel edges", err.msg)
+
+    # A cropped camera is built from its edges
+    crop = IdealCamera(collect(range(7.68, step = 0.12, length = 65)), collect(range(0.0, step = 0.12, length = 129)))
+    @test crop.pixel_edges_x[1] == 7.68
+    @test length(crop.pixel_edges_x) == 65
 end
 
 @testset "SCMOSCamera" begin
@@ -407,5 +490,76 @@ end
         cam_rect = SCMOSCamera(512, 256, (0.1, 0.15), 1.8)
         str_rect = sprint(show, cam_rect)
         @test contains(str_rect, "0.1×0.15μm")
+    end
+
+    # Arguments of any real number type are promoted to one camera type; 0.1.0 refused a whole
+    # number or a mix of Float32 and Float64 with an UndefVarError, TypeError or MethodError.
+    @testset "Number types are promoted" begin
+        c = SCMOSCamera(64, 64, 0.1, 1.6; offset = 100, gain = 2, qe = 1)
+        @test c isa SCMOSCamera{Float64}
+        @test c.offset === 100.0 && c.gain === 2.0 && c.qe === 1.0
+        c = SCMOSCamera(64, 64, 0.1, 2)
+        @test c isa SCMOSCamera{Float64} && c.readnoise === 2.0
+        c = SCMOSCamera(64, 64, 0.1f0, 1.6)
+        @test c isa SCMOSCamera{Float64} && c.readnoise === 1.6
+        @test c.pixel_edges_x[2] == Float64(0.1f0)
+        m32 = fill(1.5f0, 64, 64)
+        c = SCMOSCamera(64, 64, 0.1, m32)
+        @test c isa SCMOSCamera{Float64} && c.readnoise isa Matrix{Float64} && c.readnoise == m32
+        @test SCMOSCamera(10, 10, (0.1f0, 0.2), 1.6f0) isa SCMOSCamera{Float64}
+
+        # All Float32 stays Float32, whole numbers included; a map of type T is stored as given
+        c = SCMOSCamera(64, 64, 0.1f0, m32; offset = 100, gain = 0.5f0)
+        @test c isa SCMOSCamera{Float32}
+        @test c.readnoise === m32 && c.offset === 100.0f0 && c.qe === 1.0f0
+        @test SCMOSCamera(10, 10, (0.1f0, 0.2f0), 1.6f0) isa SCMOSCamera{Float32}
+        @test @inferred(SCMOSCamera(64, 64, 0.1f0, 1.6f0; offset = 100)) isa SCMOSCamera{Float32}
+
+        # A call of one number type gives what 0.1.0 gave, whole numbers included
+        c = SCMOSCamera(10, 10, 0.1, 1.6)
+        @test c.offset === 0.0 && c.gain === 1.0 && c.qe === 1.0
+        @test c.pixel_edges_x == collect(range(0.0, 10 * 0.1, length = 11))
+        c = SCMOSCamera(10, 10, 1, 2)
+        @test c isa SCMOSCamera{Int} && c.pixel_edges_x == collect(0:10) && c.readnoise === 2
+        @test c.offset === 0 && c.gain === 1 && c.qe === 1
+        @test SCMOSCamera(4, 2, (1, 2), 2).pixel_edges_y == [0, 2, 4]
+        @test SCMOSCamera(4, 4, Int16(1), Int16(2)) isa SCMOSCamera{Int16}
+        @test SCMOSCamera(4, 4, 1, 2; offset = 1.5) isa SCMOSCamera{Float64}
+        # Whole-number edges are exact, and an edge that does not fit throws
+        @test SCMOSCamera(2, 2, 2^53 + 1, 1).pixel_edges_x == [0, 2^53 + 1, 2 * (2^53 + 1)]
+        @test SCMOSCamera(3, 1, Int8(40), Int8(2)).pixel_edges_x == Int8[0, 40, 80, 120]
+        @test_throws OverflowError SCMOSCamera(2, 2, Int8(100), Int8(1))
+        # A union of float types promotes; counts below 0 and missing edges are refused
+        v = Union{Float32,Float64}[0f0, 1.0]
+        @test SCMOSCamera(v, v; readnoise = 1f0) isa SCMOSCamera{Float64}
+        @test SCMOSCamera(1, 1, 0.1, Union{Float32,Float64}[1f0;;]) isa SCMOSCamera{Float64}
+        @test_throws ArgumentError SCMOSCamera(-1, 2, 1, 1)
+        @test_throws ArgumentError SCMOSCamera(Float64[], [0.0, 1.0]; readnoise = 1.0)
+        @test_throws ArgumentError IdealCamera(-1, 2, 0.1)
+        @test_throws ArgumentError IdealCamera(2, -1, (0.1, 0.2))
+        # IdealCamera's whole-number edges are checked too
+        @test IdealCamera(3, 1, Int8(40)).pixel_edges_x == Int8[0, 40, 80, 120]
+        @test_throws OverflowError IdealCamera(4, 1, Int8(40))
+        @test_throws OverflowError IdealCamera(4096, 1, Int16(10))
+        # Edges and maps with other indices are taken in order
+        zv = ZeroBasedVector([0.0, 0.1, 0.2])
+        c = SCMOSCamera(zv, zv; readnoise = ZeroBasedMatrix(fill(1.5, 2, 2)))
+        @test c.pixel_edges_x == [0.0, 0.1, 0.2] && c.readnoise == fill(1.5, 2, 2)
+
+        # The edges form promotes the same way, and takes any vector of edges
+        ex32 = collect(range(0.0f0, 1.0f0, length = 11))
+        c = SCMOSCamera(ex32, collect(range(0.0, 1.0, length = 11)); readnoise = 1)
+        @test c isa SCMOSCamera{Float64} && c.readnoise === 1.0 && c.pixel_edges_x == Float64.(ex32)
+        c = SCMOSCamera(ex32, copy(ex32); readnoise = 1.6f0)
+        @test c isa SCMOSCamera{Float32} && c.pixel_edges_x === ex32
+        @test SCMOSCamera(0:0.1:1, 0:0.1:1; readnoise = 1.6) isa SCMOSCamera{Float64}
+
+        # A map of another matrix type is stored as a Matrix{T}
+        c = SCMOSCamera(4, 2, 0.1, view(fill(2.0, 2, 8), :, 1:4))
+        @test c.readnoise isa Matrix{Float64} && c.readnoise == fill(2.0, 2, 4)
+
+        # A value that is not a number or a map of numbers, or a map of the wrong size, still fails
+        @test_throws TypeError SCMOSCamera(4, 4, 0.1, 1.6; offset = "100")
+        @test_throws DimensionMismatch SCMOSCamera(4, 4, 0.1, 1.6; gain = fill(1, 3, 3))
     end
 end

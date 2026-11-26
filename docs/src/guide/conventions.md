@@ -41,14 +41,15 @@ magnification. A 6.5 µm sensor pixel behind a 100× objective is 0.065 µm.
 
 Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
 
-- The origin, `(0, 0)` µm, is the top-left corner of the camera. x increases to the right, along
-  the columns; y increases downward, along the rows.
+- The origin, `(0, 0)` µm, is the top-left corner of the sensor (of a whole-sensor camera). x
+  increases to the right, along the columns; y increases downward, along the rows.
 - Columns and rows are numbered from 1, so pixel `(1, 1)` is the top-left pixel.
 - A camera stores its pixel edges, `pixel_edges_x` and `pixel_edges_y`: `N + 1` edges per axis
-  for `N` pixels, increasing from 0. Constructors do not check this; `physical_to_pixel*` and the
+  for `N` pixels, increasing, from 0 for a whole sensor (a crop's start at its corner, below).
+  Constructors do not check this; `physical_to_pixel*` and the
   uniform-pixel formulas assume it, and the cameras' displays assume uniform pixels (they report
   the first pixel's width).
-- With uniform pixels of `Δx` × `Δy`, pixel `(col, row)` covers
+- With uniform pixels of `Δx` × `Δy`, pixel `(col, row)` of a whole sensor covers
   `[(col - 1)·Δx, col·Δx) × [(row - 1)·Δy, row·Δy)` µm and its center is at
   `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm. In pixel coordinates the center of pixel `(col, row)`
   is `(col, row)`, and the camera's corner is `(0.5, 0.5)`.
@@ -60,6 +61,14 @@ Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
   the edges starting at 0. For rectangular pixels or a camera with its own edges, use
   [`get_pixel_centers`](@ref) and the camera's edges. None of them checks that a position lies
   inside the camera.
+- A camera of a crop of the sensor is built from the crop's own edges, which start at the crop's
+  corner in sensor µm: `IdealCamera(collect(7.68:0.12:15.36), collect(0.0:0.12:15.36))` for
+  columns 65 to 128 and rows 1 to 128 of a sensor with 0.12 µm pixels. Positions are then in
+  sensor µm, and for a sensor of uniform square pixels `physical_to_pixel*` give sensor pixel
+  numbers (column 65 for the crop's first column); for rectangular or uneven pixels use the
+  crop's edges, as above. For numbers within the crop, from `(1, 1)`, subtract the crop's first
+  edges from the position first. A pixel range (`65:128`) is refused, since a range always means
+  a whole sensor, from 0 µm.
 
 ## Array order
 
@@ -79,7 +88,8 @@ in Julia:
   `corner` in a [`SingleROI`](@ref), `x_corners[k]` and `y_corners[k]` in an [`ROIBatch`](@ref).
 - Inside the ROI, `[1, 1]` is the top-left pixel. ROI pixel `data[row, col, k]` is camera pixel
   `(x, y) = (x_corners[k] + col - 1, y_corners[k] + row - 1)`. For uniform pixels of `Δx` × `Δy`
-  its center is at `((x_corners[k] + col - 1.5)·Δx, (y_corners[k] + row - 1.5)·Δy)` µm.
+  its center is at `(x0 + (x_corners[k] + col - 1.5)·Δx, y0 + (y_corners[k] + row - 1.5)·Δy)`
+  µm, where `(x0, y0)` are the camera's first pixel edges (0 for a whole sensor).
 - ROI data are in the camera's raw units: ADU for an [`SCMOSCamera`](@ref), which a fitter
   converts to electrons with the `offset` and `gain` of the camera pixels under the ROI. That
   conversion relies on the map order above and on the corner convention.

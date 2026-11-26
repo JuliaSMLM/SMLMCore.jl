@@ -40,10 +40,12 @@ those versions define the same types: Pkg reports unsatisfiable requirements for
   types with ground truth, as SMLMSim does, stores `photons` before QE.
 - `pixel_size` is the size of a pixel at the sample (the sensor pixel divided by the
   magnification), in µm.
-- The origin, `(0, 0)` µm, is the camera's top-left corner. x runs along the columns and y down
-  the rows.
+- The origin, `(0, 0)` µm, is the sensor's top-left corner. x runs along the columns and y down
+  the rows. A camera of a crop has edges from the crop's corner, in sensor µm.
 - Pixels are labeled `(x, y) = (col, row)`, numbered from 1; arrays are indexed `[row, col]`.
-  With uniform pixels, pixel `(col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm.
+  With uniform pixels, pixel `(col, row)` of a camera is centered at
+  `(x0 + (col - 0.5)·Δx, y0 + (row - 0.5)·Δy)` µm, where `(x0, y0)` are its first edges (0 for
+  a whole sensor).
   In pixel coordinates the top-left pixel's center is `(1, 1)` and the camera's corner is
   `(0.5, 0.5)`.
 - Images and per-pixel arrays are indexed `[row, col] = [y, x]`. An sCMOS calibration map has
@@ -142,8 +144,8 @@ mutable struct Emitter3DFit{T} <: AbstractEmitter
 end
 
 struct IdealCamera{T} <: AbstractCamera
-    pixel_edges_x::Vector{T}   # µm, from 0, one more than the number of pixels
-    pixel_edges_y::Vector{T}   # µm, from 0, one more than the number of pixels
+    pixel_edges_x::Vector{T}   # µm, from 0 (a crop: from its corner); N + 1 for N pixels
+    pixel_edges_y::Vector{T}   # µm, likewise
 end
 
 struct SCMOSCamera{T<:Real} <: AbstractCamera
@@ -212,19 +214,21 @@ cam_scmos = SCMOSCamera(512, 512, 0.1, 1.6)     # 1.6 e⁻ rms, the same for eve
 # A 2048 × 2048 sensor of 6.5 µm pixels behind a 100× objective: 0.065 µm at the sample
 cam_spec = SCMOSCamera(2048, 2048, 0.065, 1.6; offset = 100.0, gain = 0.46, qe = 0.72)
 
-# Per-pixel maps have size (ny, nx) and the number type of pixel_size
+# Per-pixel maps have size (ny, nx)
 readnoise_map = 1.6 .+ 0.2 .* rand(512, 512)
 qe_map = fill(0.8, 512, 512)
 cam_maps = SCMOSCamera(512, 512, 0.1, readnoise_map; offset = 100.0, gain = 0.5, qe = qe_map)
 ```
 
-- `IdealCamera(1:512, 1:512, 0.1)` gives the same camera as `IdealCamera(512, 512, 0.1)`: only
-  the ranges' lengths are used, and the edges always start at 0.
-- In an `SCMOSCamera` call, `pixel_size`, `readnoise`, `offset`, `gain` and `qe` share one
-  number type, the type of `pixel_size`. A call that mixes number types fails: with an
-  `UndefVarError` (`T` not defined) when scalars of different types are passed positionally, a
-  `MethodError` for a map of another element type, and a `TypeError` for a keyword. Convert the
-  values first, and write `offset = 100.0`, not `100`.
+- `IdealCamera(1:512, 1:512, 0.1)` and `IdealCamera(0:511, 0:511, 0.1)` give the same camera as
+  `IdealCamera(512, 512, 0.1)`: a range numbers the whole sensor's pixels from 0 or from 1, and
+  the edges start at 0. A range that starts anywhere else (a crop such as `101:612`) throws an
+  `ArgumentError`; build a cropped camera from its pixel edges, `IdealCamera(edges_x, edges_y)`.
+- An `SCMOSCamera`'s number type `T` is the promoted type of the numbers given: `pixel_size`
+  (or the edges), `readnoise`, and `offset`, `gain` and `qe` when passed (a map by its element
+  type). All `Float32` gives `SCMOSCamera{Float32}`; whole numbers take the type of the rest
+  (`offset = 100` gives `100.0` beside a `Float64` pixel size); `Float32` with `Float64` gives
+  `Float64`. A map that is already a `Matrix{T}` is stored as given.
 - `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset, gain, qe)` builds a camera from
   its pixel edges (µm), which need not be uniform.
 
@@ -310,6 +314,9 @@ edges_x, edges_y = compute_bin_edges(1:512, 1:512, 0.1)    # pixel edges, µm, f
   `n` covers `[(n - 1)·pixel_size, n·pixel_size)`, up to floating-point rounding (a position
   computed as `(n - 1) * pixel_size` can fall in pixel `n - 1`). It does not check bounds.
 - `pixel_to_physical` returns `pixel_size`'s type, so `pixel_size` must be a float.
+  `physical_to_pixel` keeps the type of `x / pixel_size` (Float32 stays Float32), and gives the
+  Float64 nearest the exact value (rounded once) when a `Rational` meets a `Rational` or an
+  integer.
 
 ### Filtering Operations
 
@@ -317,6 +324,10 @@ edges_x, edges_y = compute_bin_edges(1:512, 1:512, 0.1)    # pixel edges, µm, f
 bright = @filter(smld, photons > 1000)                     # select bright emitters
 precise = @filter(smld, σ_x < 0.02 && σ_y < 0.02)          # select precise localizations
 inside = @filter(smld, 0.5 <= x <= 2.0 && frame in (1, 2)) # chained comparison, tuple
+threshold = 1000.0
+bright2 = @filter(smld, photons > threshold && abs(x - 1.0) ≤ 0.5) # a variable, a function
+frame = 2
+this_frame = @filter(smld, frame == $frame)   # $name: the variable, not the property
 
 frame_2 = filter_frames(smld, 2)              # one frame
 early_frames = filter_frames(smld, 1:10)      # a range of frames
@@ -324,26 +335,33 @@ some_frames = filter_frames(smld, [1, 3, 5])  # a vector of frames
 
 region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclusive
 # 3D emitters: filter_roi(smld3d, (0.0, 2.0), (1.0, 3.0), (-0.5, 0.5))
-
-# A threshold held in a variable: filter the emitters directly
-threshold = 1000.0
-bright2 = BasicSMLD(filter(e -> e.photons > threshold, smld.emitters), smld.camera,
-                    smld.n_frames, smld.n_datasets, copy(smld.metadata))
 ```
 
-- In `@filter`, every name in the condition is read as an emitter property, except the
-  operators `<`, `>`, `<=`, `>=`, `==`, `!=`, `in` and `∈`, and `&&` and `||`. A condition
-  therefore holds only property names, number literals and tuples. It cannot use a variable
-  (`photons > threshold` reads `e.threshold`), a function (`abs(x)`), arithmetic (`x + y`), `!`,
-  a range (`frame in 1:10`) or `≤` and `≥`; each throws an error that names the missing field
-  (a `FieldError` from Julia 1.12, an `ErrorException` before).
+- In `@filter`, a name in the condition is an emitter property when the emitter has one of that
+  name (`hasproperty`), and otherwise the variable or function of that name where `@filter` is
+  called; called functions follow the same rule. A name that is both reads the property;
+  `$name` reads the variable and `$f(x)` calls the caller's `f`, each `$expr` evaluated once
+  where `@filter` is called. A name that is neither is read with `getproperty`, which reads a
+  property the emitter computes without listing it and otherwise throws its error. `e` is the
+  emitter itself (`e.name`, `f(e)`). Operators are never properties. A property is read where
+  the condition reaches it, as in 0.1.0 (`photons > 100 && z > 0` stops before `z`); a caller
+  variable is read once, where `@filter` is called, after the data set. Names the condition
+  binds itself, `e` included, keep Julia's own scope rules, each starting as the property or
+  caller variable of that name (`e` as the emitter), and its assignments never reach the
+  caller's variables (a name it declares `global` is the module's). Other macros expand first;
+  in a nested `@filter`, a free name is the inner emitter's property, else follows the outer
+  condition. Keyword names, field names, types in `x::T` and quoted code are not names. The
+  condition gives `true` or `false` (or `1` or `0`); one whose value is an assignment
+  (`dataset = 1`) is refused.
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
   `Emitter3D` throw an error that names the missing field.
 - `filter_roi` bounds are inclusive. A range's smallest and largest elements are the bounds, so
-  `0.0:0.3:1.0` stops at 0.9; prefer tuples. The 2D form needs 2D emitters and the 3D form 3D
-  emitters.
+  `0.0:0.3:1.0` stops at 0.9; pass tuples. Any range other than whole numbers in steps of 1
+  (`0:2`, `0:1:2`) logs a warning once per logger (once per Julia session with the default
+  logger), since a range that lost its stop cannot be told from one written to stop there. The
+  2D form needs 2D emitters and the 3D form 3D emitters.
 
 ```julia
 # Spatial dimension: what the type declares (SMLMCore's emitter types declare 2 or 3), else 3
@@ -381,7 +399,13 @@ by_dataset = merge_smld([smld_a, smld_b]; adjust_datasets = true)
   calibration included) and the same emitter type.
 - Renumbering moves each input by the earlier inputs' total `n_frames` (or `n_datasets`), and
   needs a `frame` (or `dataset`) property; `Emitter2D` and `Emitter3D` have neither. The inputs
-  are never modified.
+  are never modified. A renumbered emitter is built from the input's fields and shares its
+  object fields with the input. A type with its own `getproperty` or `setproperty!` is
+  deep-copied: a mutable one is moved through them, both numbers read first and the setter
+  given `e.frame + offset` as in 0.1.0; an immutable one is rebuilt from its fields. Either way
+  both numbers must then read as moved, or it throws (a setter that changes the other number or
+  clamps, a getter that maps the stored frame). Sums, moved numbers and result counts are exact:
+  one that does not fit throws, never wraps or rounds.
 - Metadata is a copy of the first input's, plus `"concatenated_from"` (`cat_smld`) or
   `"merged_from"`, `"frame_adjustment"` and `"dataset_adjustment"` (`merge_smld`). The other
   inputs' metadata are dropped.
@@ -462,9 +486,8 @@ end
 
 ### Types
 - The emitter keyword constructors need their positional values already of type `T`.
-- `SCMOSCamera` arguments share one number type. A call that mixes number types fails: with an
-  `UndefVarError` (`T` not defined) when scalars of different types are passed positionally, a
-  `MethodError` for a map of another element type, and a `TypeError` for a keyword.
+- `SCMOSCamera` promotes its arguments to one number type, `T`: all `Float32` stays `Float32`,
+  and `Float32` with `Float64` gives `Float64`.
 - `BasicSMLD` infers `T` from the camera's pixel edges, and its metadata must be a
   `Dict{String,Any}`.
 
@@ -473,8 +496,6 @@ end
   its emitters are the input's own mutable objects: setting `bright.emitters[1].photons = 0`
   changes `smld` as well. `deepcopy` the result before changing emitters in place. `cat_smld`
   and `merge_smld` share emitters with their inputs in the same way, except renumbered ones.
-- A variable in an `@filter` condition is read as an emitter property; filter
-  `smld.emitters` with `filter` instead.
 - Applying an ROI filter of the wrong dimension, or `filter_frames` to emitters without a
   `frame` field, throws an error.
 

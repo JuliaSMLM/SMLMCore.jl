@@ -501,14 +501,25 @@ end
                 @test (t2.frame, t2.t) == (2, 0.02)
             end
 
-            @testset "Mutable emitter with a field left undefined" begin
-                # copied by deepcopy; a defined object field stays shared
+            @testset "Mutable emitter with an object field, defined or not" begin
+                # rebuilt from its fields, so the object stays shared, as in 0.1.0; unset stays unset
                 m = merge_smld(sm([ExtraTestEmitter(1, 1)], 10), sm([ExtraTestEmitter(2, 1)], 10); adjust_frames=true)
                 @test m.emitters[2].frame == 12 && !isdefined(m.emitters[2], :extra)
                 v = [1.0]
                 in2 = ExtraTestEmitter(2, 1, v)
                 m = merge_smld(sm([ExtraTestEmitter(1, 1, [0.0])], 10), sm([in2], 10); adjust_frames=true)
                 @test m.emitters[2].frame == 12 && m.emitters[2].extra === v && in2.frame == 2
+                @test m.emitters[2] !== in2
+            end
+
+            @testset "Objects shared by many emitters are not copied" begin
+                # 50 emitters holding one 8 MB array: a deep copy each would allocate 400 MB
+                big_v = zeros(10^6)
+                mkx(f) = sm([ExtraTestEmitter(f, 1, big_v) for _ in 1:50], 10)
+                a, b = mkx(1), mkx(2)
+                merge_smld(a, b; adjust_frames=true)
+                @test @allocated(merge_smld(a, b; adjust_frames=true)) < 10^6
+                @test all(e -> e.extra === big_v, merge_smld(a, b; adjust_frames=true).emitters)
             end
 
             @testset "Input vector of abstract element type" begin
@@ -620,4 +631,731 @@ end
         push!(c.emitters, Emitter2DFit{Float64}(9.0, 9.0, 1.0, 1.0, 0.1, 0.1, 1.0, 1.0))
         @test length(s.emitters) == 3
     end
+end
+
+# A custom data set whose counts are BigInts, and a mutable emitter whose frame is a property
+# held in a vector: merge_smld converted every count to Int before checking whether it
+# renumbers (an InexactError beyond typemax(Int)), and renumbering wrote the new frame through
+# a vector shared with the input emitter.
+struct BigCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::BigInt
+    n_datasets::BigInt
+    metadata::Dict{String,Any}
+end
+mutable struct StoredFrameEmitter <: SMLMCore.AbstractEmitter
+    x::Float64
+    y::Float64
+    store::Vector{Int}
+    dataset::Int
+end
+Base.getproperty(e::StoredFrameEmitter, s::Symbol) =
+    s === :frame ? getfield(e, :store)[1] : getfield(e, s)
+Base.setproperty!(e::StoredFrameEmitter, s::Symbol, v) =
+    s === :frame ? (getfield(e, :store)[1] = v) : setfield!(e, s, v)
+
+@testset "merge_smld with large counts and property-held frames" begin
+    cam = IdealCamera(64, 64, 0.1)
+    e = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    huge = big(typemax(Int)) + 1
+    b = BigCountSMLD([e], cam, big(1), huge, Dict{String,Any}())
+    m = merge_smld(b, b)
+    @test m.n_datasets == huge && m.n_frames == 1
+    m = merge_smld(b, b; adjust_frames = true)
+    @test [x.frame for x in m.emitters] == [1, 2] && m.n_frames == 2
+    # A dataset number beyond Int does not fit the emitters' Int field
+    @test_throws InexactError merge_smld(b, b; adjust_datasets = true)
+
+    mk() = BasicSMLD([StoredFrameEmitter(1.0, 1.0, [1], 1), StoredFrameEmitter(2.0, 2.0, [2], 1)],
+                     cam, 2, 1, Dict{String,Any}())
+    a, c = mk(), mk()
+    m = merge_smld(a, c; adjust_frames = true)
+    @test [x.frame for x in m.emitters] == [1, 2, 3, 4]
+    @test [x.frame for x in c.emitters] == [1, 2]
+    @test [x.frame for x in a.emitters] == [1, 2]
+end
+
+# Counts of any integer type in one SMLD type; emitters numbered in BigInt; a setter that stores
+# without converting; an immutable emitter whose frame is a property held in a vector
+struct AnyCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Integer
+    n_datasets::Integer
+    metadata::Dict{String,Any}
+end
+mutable struct BigNumberEmitter <: SMLMCore.AbstractEmitter
+    frame::BigInt
+    dataset::BigInt
+end
+mutable struct ForwardSetterEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+end
+Base.setproperty!(e::ForwardSetterEmitter, s::Symbol, v) = setfield!(e, s, v)
+struct StoredFrameImmutable <: SMLMCore.AbstractEmitter
+    store::Vector{Int}
+    dataset::Int
+end
+Base.getproperty(e::StoredFrameImmutable, s::Symbol) =
+    s === :frame ? getfield(e, :store)[1] : getfield(e, s)
+Base.setproperty!(e::StoredFrameImmutable, s::Symbol, v) =
+    s === :frame ? (getfield(e, :store)[1] = v) : setfield!(e, s, v)
+Base.propertynames(::StoredFrameImmutable) = (:store, :dataset, :frame)
+
+@testset "merge_smld offsets never wrap, and moved numbers keep their type" begin
+    cam = IdealCamera(64, 64, 0.1)
+    fe(f) = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+    any_s(f, nf) = AnyCountSMLD([fe(f)], cam, nf, 1, Dict{String,Any}())
+
+    # Counts of different widths: the sum is taken in Int or wider, never in UInt8
+    m = merge_smld(any_s(1, UInt8(200)), any_s(1, UInt8(100)), any_s(1, big(1)); adjust_frames = true)
+    @test [e.frame for e in m.emitters] == [1, 201, 301] && m.n_frames == 301
+
+    # A sum or a moved number that does not fit throws instead of wrapping
+    @test_throws OverflowError merge_smld(any_s(1, typemax(Int)), any_s(1, 1), any_s(1, 1);
+                                          adjust_frames = true)
+    @test_throws OverflowError merge_smld(any_s(1, typemax(Int)), any_s(typemax(Int), 1);
+                                          adjust_frames = true)
+    c32(f, n) = CountTestSMLD([fe(f)], cam, Int32(n), Int32(1), Dict{String,Any}())
+    @test_throws InexactError merge_smld(c32(1, typemax(Int32)), c32(1, 10); adjust_frames = true)
+
+    # A wide offset moves wide numbers: the second input's dataset is 2^64 + 1
+    bn(d) = AnyCountSMLD([BigNumberEmitter(1, d)], cam, 1, big(2)^64, Dict{String,Any}())
+    m = merge_smld(bn(1), bn(1); adjust_datasets = true)
+    @test [e.dataset for e in m.emitters] == [1, big(2)^64 + 1]
+    @test m.n_datasets == big(2)^65
+
+    # A setter that stores without converting gets the number in its own type
+    fs(f) = CountTestSMLD([ForwardSetterEmitter(f, 1)], cam, UInt(1), UInt(1), Dict{String,Any}())
+    m = merge_smld(fs(1), fs(1); adjust_frames = true, adjust_datasets = true)
+    @test [(e.frame, e.dataset) for e in m.emitters] == [(1, 1), (2, 2)]
+
+    # An immutable emitter with its own setter is copied and set through it; the input is unchanged
+    im(f) = BasicSMLD([StoredFrameImmutable([f], 1)], cam, 5, 1, Dict{String,Any}())
+    a, b = im(1), im(2)
+    m = merge_smld(a, b; adjust_frames = true)
+    @test [e.frame for e in m.emitters] == [1, 7]
+    @test b.emitters[1].frame == 2
+end
+
+# A frame read through a getter that differs from the stored field; float frames; a setter that
+# moves the dataset with the frame; a cache field left unset; a frame field of abstract type
+mutable struct SentinelFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Int              # 0: the frame is source_frame
+    source_frame::Int
+    dataset::Int
+end
+Base.getproperty(e::SentinelFrameEmitter, s::Symbol) =
+    s === :frame && getfield(e, :frame) == 0 ? getfield(e, :source_frame) : getfield(e, s)
+mutable struct FloatFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Float32
+    dataset::Int
+end
+mutable struct AcquisitionEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int            # one acquisition per 10 frames, kept in step by the setter
+end
+function Base.setproperty!(e::AcquisitionEmitter, s::Symbol, v)
+    s === :frame && setfield!(e, :dataset,
+        getfield(e, :dataset) + fld(v - 1, 10) - fld(getfield(e, :frame) - 1, 10))
+    return setfield!(e, s, convert(Int, v))
+end
+mutable struct CachedModelEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+    model::Vector{Float64}
+    cache::Vector{Float64}
+    CachedModelEmitter(f, d, m) = new(f, d, m)
+end
+mutable struct AbstractFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Integer
+    dataset::Int
+end
+
+@testset "merge_smld moves each number once, from its public value" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf, nd = 1) = BasicSMLD(v, cam, nf, nd, Dict{String,Any}())
+
+    # The moved frame starts from e.frame, as in 0.1.0, not from the stored field
+    m = merge_smld(sm([SentinelFrameEmitter(1, 0, 1)], 10), sm([SentinelFrameEmitter(0, 7, 1)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame == 17
+
+    # A float frame moves only when it holds the result exactly
+    m = merge_smld(sm([FloatFrameEmitter(1f0, 1)], 10), sm([FloatFrameEmitter(3f0, 1)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame === 13f0
+    @test_throws InexactError merge_smld(sm([FloatFrameEmitter(2f0^24, 1)], 2^24),
+                                         sm([FloatFrameEmitter(1f0, 1)], 1); adjust_frames = true)
+
+    # Both numbers are computed before a setter that changes the other runs
+    m = merge_smld(sm([AcquisitionEmitter(1, 1)], 10, 1), sm([AcquisitionEmitter(1, 2)], 10, 2);
+                   adjust_frames = true, adjust_datasets = true)
+    @test (m.emitters[2].frame, m.emitters[2].dataset) == (11, 3)
+
+    # A cache left unset stays unset, and the shared model is not copied
+    model = zeros(10^6)
+    mk(f) = sm([CachedModelEmitter(f, 1, model) for _ in 1:5], 10)
+    a, b = mk(1), mk(2)
+    merge_smld(a, b; adjust_frames = true)
+    @test @allocated(merge_smld(a, b; adjust_frames = true)) < 10^6
+    m = merge_smld(a, b; adjust_frames = true)
+    @test all(e -> e.model === model && !isdefined(e, :cache), m.emitters)
+    @test [e.frame for e in m.emitters] == [fill(1, 5); fill(12, 5)]
+
+    # A field of abstract type takes the moved value as it is, as in 0.1.0
+    m = merge_smld(sm([AbstractFrameEmitter(UInt8(1), 1)], 10), sm([AbstractFrameEmitter(UInt8(250), 1)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame == 260
+
+    # A moved number that overflows throws, though the counts' sum fits
+    fe(f) = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+    @test_throws OverflowError merge_smld(sm([fe(1)], 10), sm([fe(typemax(Int) - 5)], 10);
+                                          adjust_frames = true)
+    # A sum of counts that overflows throws, though no emitter moves
+    empty_s(nf) = BasicSMLD(Emitter2DFit{Float64}[], cam, nf, 1, Dict{String,Any}())
+    @test_throws OverflowError merge_smld(empty_s(typemax(Int)), empty_s(1); adjust_frames = true)
+
+    # A mutable type with no frame throws getproperty's error, as in 0.1.0
+    e2 = BasicSMLD([Emitter2D{Float64}(1.0, 1.0, 1000.0)], cam, 1, 1)
+    err = try
+        merge_smld(e2, e2; adjust_frames = true); nothing
+    catch ex
+        ex
+    end
+    @test err isa Exception && !(err isa ArgumentError) && occursin("frame", sprint(showerror, err))
+    # exactly getproperty's error: a FieldError from Julia 1.12, an ErrorException before
+    @test err isa (isdefined(Core, :FieldError) ? getfield(Core, :FieldError) : ErrorException)
+end
+
+# An immutable emitter storing frames from 0 behind a getter from 1; a mutable one whose frame
+# field may be unset behind a getter; a Float32 field behind a Float64 getter; a setter that
+# moves the frame with the dataset; float counts; const fields; a setter that stores as given
+struct ZeroBasedFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+end
+Base.getproperty(e::ZeroBasedFrameEmitter, s::Symbol) =
+    s === :frame ? getfield(e, :frame) + 1 : getfield(e, s)
+mutable struct UnsetFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Integer
+    source_frame::Int
+    dataset::Int
+    UnsetFrameEmitter(s, d) = (e = new(); setfield!(e, :source_frame, s); setfield!(e, :dataset, d); e)
+end
+Base.getproperty(e::UnsetFrameEmitter, s::Symbol) =
+    s === :frame && !isdefined(e, :frame) ? getfield(e, :source_frame) : getfield(e, s)
+mutable struct WideGetterEmitter <: SMLMCore.AbstractEmitter
+    frame::Float32
+    dataset::Int
+end
+Base.getproperty(e::WideGetterEmitter, s::Symbol) =
+    s === :frame ? Float64(getfield(e, :frame)) : getfield(e, s)
+mutable struct DatasetCoupledEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int            # ten frames per dataset, kept in step by the setter
+end
+function Base.setproperty!(e::DatasetCoupledEmitter, s::Symbol, v)
+    s === :dataset && setfield!(e, :frame, getfield(e, :frame) + 10 * (v - getfield(e, :dataset)))
+    return setfield!(e, s, convert(Int, v))
+end
+struct FloatCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Float32
+    n_datasets::Float32
+    metadata::Dict{String,Any}
+end
+mutable struct ConstModelEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+    const model::Vector{Float64}
+    cache::Vector{Float64}
+    ConstModelEmitter(f, d, m) = new(f, d, m)
+end
+mutable struct ConstFrameEmitter <: SMLMCore.AbstractEmitter
+    const frame::Int
+    dataset::Int
+    model::Vector{Float64}
+end
+mutable struct NarrowSetterEmitter <: SMLMCore.AbstractEmitter
+    frame::Int32
+    dataset::Int32
+end
+Base.setproperty!(e::NarrowSetterEmitter, s::Symbol, v) = setfield!(e, s, v)
+
+@testset "merge_smld renumbers as 0.1.0 read the numbers, and never inconsistently" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf, nd = 1) = BasicSMLD(v, cam, nf, nd, Dict{String,Any}())
+
+    # An immutable type moves its stored field, as 0.1.0 did: public frames 1 and 2
+    m = merge_smld(sm([ZeroBasedFrameEmitter(0, 1)], 1), sm([ZeroBasedFrameEmitter(0, 1)], 1);
+                   adjust_frames = true)
+    @test [e.frame for e in m.emitters] == [1, 2]
+
+    # A mutable type moves e.frame, even when its field is unset behind the getter
+    m = merge_smld(sm([UnsetFrameEmitter(1, 1)], 10), sm([UnsetFrameEmitter(7, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17
+
+    # A float field must hold the moved number exactly, whatever the getter's type
+    @test_throws InexactError merge_smld(sm([WideGetterEmitter(1f0, 1)], 2^24),
+                                         sm([WideGetterEmitter(1f0, 1)], 1); adjust_frames = true)
+    m = merge_smld(sm([FloatFrameEmitter(1f0, 1)], 2^24 + 1), sm([FloatFrameEmitter(1f0, 1)], 1);
+                   adjust_frames = true)
+    @test m.emitters[2].frame === Float32(2^24 + 2)               # exact, though 2^24 + 1 is not
+
+    # A setter that changes the other number is refused, not left inconsistent
+    @test_throws ArgumentError merge_smld(sm([AcquisitionEmitter(1, 1)], 10, 1),
+                                          sm([AcquisitionEmitter(1, 1)], 10, 1); adjust_frames = true)
+    @test_throws ArgumentError merge_smld(sm([DatasetCoupledEmitter(1, 1)], 10, 1),
+                                          sm([DatasetCoupledEmitter(1, 1)], 10, 1);
+                                          adjust_frames = true, adjust_datasets = true)
+
+    # Float counts move whole numbers exactly, and a total the counts' type cannot hold throws
+    fe(f) = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+    fc(f, nf) = FloatCountSMLD([fe(f)], cam, Float32(nf), 1f0, Dict{String,Any}())
+    m = merge_smld(fc(1, 10), fc(1, 10); adjust_frames = true)
+    @test [e.frame for e in m.emitters] == [1, 11] && m.n_frames === 20f0
+    @test_throws InexactError merge_smld(fc(2^24, 2^24), fc(1, 1); adjust_frames = true)
+
+    # const fields: the model stays shared and an unset cache unset; a const frame is moved at
+    # construction
+    model = zeros(4)
+    m = merge_smld(sm([ConstModelEmitter(1, 1, model)], 10), sm([ConstModelEmitter(2, 1, model)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame == 12 && m.emitters[2].model === model && !isdefined(m.emitters[2], :cache)
+    m = merge_smld(sm([ConstFrameEmitter(1, 1, model)], 10), sm([ConstFrameEmitter(2, 1, model)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame == 12 && m.emitters[2].model === model
+
+    # A setter that stores as given gets the number in the property's own type
+    m = merge_smld(sm([NarrowSetterEmitter(1, 1)], 10), sm([NarrowSetterEmitter(1, 1)], 10);
+                   adjust_frames = true, adjust_datasets = true)
+    @test m.emitters[2].frame === Int32(11) && m.emitters[2].dataset === Int32(2)
+end
+
+# A const model, an unset cache and a measurement after it; an unset frame behind a getter next
+# to a const field; counts of any real type; a dataset read through an unlisted getter and
+# changed by the frame setter; an unset dataset beside a setter that writes only its own field;
+# a getter that fills its field on first read; a setter that clamps; a NaN frame
+mutable struct HoleBeforeMeasurement <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+    const model::Vector{Int}
+    cache::Vector{Int}
+    photons::Float64
+    function HoleBeforeMeasurement(f, d, m, p)
+        e = new(f, d, m)
+        e.photons = p
+        return e
+    end
+end
+mutable struct ConstSourceEmitter <: SMLMCore.AbstractEmitter
+    const source_frame::Int
+    dataset::Int
+    frame::Integer
+    ConstSourceEmitter(s, d) = new(s, d)
+end
+Base.getproperty(e::ConstSourceEmitter, s::Symbol) =
+    s === :frame && !isdefined(e, :frame) ? getfield(e, :source_frame) : getfield(e, s)
+struct RealCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Real
+    n_datasets::Real
+    metadata::Dict{String,Any}
+end
+mutable struct HiddenDatasetEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    ds::Int
+end
+Base.getproperty(e::HiddenDatasetEmitter, s::Symbol) = s === :dataset ? getfield(e, :ds) : getfield(e, s)
+Base.setproperty!(e::HiddenDatasetEmitter, s::Symbol, v) =
+    s === :frame ? (setfield!(e, :ds, getfield(e, :ds) + 1); setfield!(e, :frame, v)) : setfield!(e, s, v)
+mutable struct UnsetDatasetSetter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Integer
+    UnsetDatasetSetter(f) = (e = new(); setfield!(e, :frame, f); e)
+end
+Base.setproperty!(e::UnsetDatasetSetter, s::Symbol, v) = setfield!(e, s, convert(fieldtype(typeof(e), s), v))
+mutable struct LazyFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Integer
+    source_frame::Int
+    dataset::Int
+    LazyFrameEmitter(s, d) = (e = new(); setfield!(e, :source_frame, s); setfield!(e, :dataset, d); e)
+end
+Base.getproperty(e::LazyFrameEmitter, s::Symbol) = s === :frame ?
+    (isdefined(e, :frame) || setfield!(e, :frame, getfield(e, :source_frame)); getfield(e, :frame)) :
+    getfield(e, s)
+mutable struct ClampedFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+end
+Base.setproperty!(e::ClampedFrameEmitter, s::Symbol, v) =
+    setfield!(e, s, s === :frame ? min(Int(v), 15) : convert(Int, v))
+
+@testset "merge_smld keeps every set field, every count exact, and its inputs untouched" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf, nd = 1) = BasicSMLD(v, cam, nf, nd, Dict{String,Any}())
+
+    # A hole before a measurement in a type with a const field: the measurement is kept
+    model = [1, 2]
+    m = merge_smld(sm([HoleBeforeMeasurement(1, 1, model, 1.0)], 10),
+                   sm([HoleBeforeMeasurement(1, 1, model, 4321.0)], 10); adjust_frames = true)
+    @test m.emitters[2].photons == 4321.0 && m.emitters[2].frame == 11 && !isdefined(m.emitters[2], :cache)
+    # an unset frame behind a getter, beside a const field, moves from the getter, as in 0.1.0
+    m = merge_smld(sm([ConstSourceEmitter(1, 1)], 10), sm([ConstSourceEmitter(7, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17
+
+    # Counts compared and summed exactly, whatever their types
+    fe(f) = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+    rc(f, nf) = RealCountSMLD([fe(f)], cam, nf, 1, Dict{String,Any}())
+    m = merge_smld(rc(16_777_217, 16_777_217), rc(1, Float32(16_777_216)))
+    @test m.n_frames == 16_777_217
+    m = merge_smld(rc(1, Float32(2^24)), rc(1, 1//1); adjust_frames = true)
+    @test m.n_frames == 2^24 + 1 && m.emitters[2].frame == 2^24 + 1
+
+    # A setter that changes the other number is refused, also through an unlisted getter, and
+    # also when only datasets move
+    @test_throws ArgumentError merge_smld(sm([HiddenDatasetEmitter(1, 1)], 10),
+                                          sm([HiddenDatasetEmitter(1, 1)], 10); adjust_frames = true)
+    @test_throws ArgumentError merge_smld(sm([DatasetCoupledEmitter(1, 1)], 10, 1),
+                                          sm([DatasetCoupledEmitter(1, 1)], 10, 1); adjust_datasets = true)
+    # an unset number the merge does not move is fine, as in 0.1.0
+    m = merge_smld(sm([UnsetDatasetSetter(1)], 2), sm([UnsetDatasetSetter(1)], 2); adjust_frames = true)
+    @test m.emitters[2].frame == 3
+    # a setter that stores another value than the one given (a clamp) is refused
+    @test_throws ArgumentError merge_smld(sm([ClampedFrameEmitter(1, 1)], 10),
+                                          sm([ClampedFrameEmitter(7, 1)], 10); adjust_frames = true)
+    m = merge_smld(sm([ClampedFrameEmitter(1, 1)], 10), sm([ClampedFrameEmitter(4, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 14
+
+    # A getter that fills its field on first read fills the copy's, not the input's
+    lazy = LazyFrameEmitter(7, 1)
+    m = merge_smld(sm([LazyFrameEmitter(1, 1)], 10), sm([lazy], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17 && !isdefined(lazy, :frame)
+
+    # A NaN frame stays NaN, as in 0.1.0
+    m = merge_smld(sm([FloatFrameEmitter(1f0, 1)], 10), sm([FloatFrameEmitter(NaN32, 1)], 10); adjust_frames = true)
+    @test isnan(m.emitters[2].frame)
+end
+
+# Round five: a frame read through the dataset; a setter only for Int; a frame setter that sets
+# the dataset beside a dataset setter that keeps the larger; getters that write; a const frame
+# beside an unset cache; a getter of another float type; a frame read through a table
+mutable struct DefaultFrameEmitter <: SMLMCore.AbstractEmitter
+    dataset::Int
+    frame::Int            # 0: the dataset's first frame
+end
+Base.getproperty(e::DefaultFrameEmitter, s::Symbol) =
+    s === :frame && getfield(e, :frame) == 0 ? (getfield(e, :dataset) == 1 ? 2 : 9) : getfield(e, s)
+mutable struct PackedFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Int32
+    dataset::Int
+    time_ms::Int
+end
+function Base.setproperty!(e::PackedFrameEmitter, s::Symbol, v::Int)
+    s === :frame && setfield!(e, :time_ms, 10v)
+    return setfield!(e, s, convert(fieldtype(PackedFrameEmitter, s), v))
+end
+mutable struct BlockDatasetEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+end
+function Base.setproperty!(e::BlockDatasetEmitter, s::Symbol, v)
+    s === :frame || return setfield!(e, :dataset, max(getfield(e, :dataset), Int(v)))
+    setfield!(e, :dataset, cld(Int(v), 1000))
+    return setfield!(e, :frame, Int(v))
+end
+mutable struct LookedUpEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    const dataset::Int
+    looked_up::Bool
+end
+Base.getproperty(e::LookedUpEmitter, s::Symbol) =
+    (s === :frame && setfield!(e, :looked_up, true); getfield(e, s))
+mutable struct SeenFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+    seen::Dict{Symbol,Int}
+    extra::Vector{Int}
+    SeenFrameEmitter(f, d) = new(f, d, Dict{Symbol,Int}())
+end
+Base.getproperty(e::SeenFrameEmitter, s::Symbol) =
+    s === :frame ? (getfield(e, :seen)[:frame] = getfield(e, :frame)) : getfield(e, s)
+mutable struct ConstFrameCacheEmitter <: SMLMCore.AbstractEmitter
+    const frame::Int
+    dataset::Int
+    model::Vector{Float64}
+    cache::Vector{Float64}
+    ConstFrameCacheEmitter(f, d, m) = new(f, d, m)
+end
+mutable struct ImportedFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Float64        # 0: not set by the importer, read as frame 1
+    dataset::Int
+end
+Base.getproperty(e::ImportedFrameEmitter, s::Symbol) =
+    s === :frame && getfield(e, :frame) == 0 ? 1f0 : getfield(e, s)
+mutable struct Float64FrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Float64
+    dataset::Int
+end
+mutable struct TableFrameEmitter <: SMLMCore.AbstractEmitter
+    index::Int
+    dataset::Int
+end
+Base.getproperty(e::TableFrameEmitter, s::Symbol) =
+    s === :frame ? (1:10)[getfield(e, :index)] : getfield(e, s)
+Base.setproperty!(e::TableFrameEmitter, s::Symbol, v) =
+    setfield!(e, s === :frame ? :index : s, convert(Int, v))
+
+@testset "merge_smld reads both numbers first, and isolates every getter and setter" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf, nd = 1) = BasicSMLD(v, cam, nf, nd, Dict{String,Any}())
+
+    # Both numbers are read before either is set, whatever the field order
+    m = merge_smld(sm([DefaultFrameEmitter(1, 1)], 10), sm([DefaultFrameEmitter(1, 0)], 2);
+                   adjust_frames = true, adjust_datasets = true)
+    @test (m.emitters[2].frame, m.emitters[2].dataset, m.n_frames) == (12, 2, 12)
+
+    # A setter defined only for 0.1.0's sum type is still the one that runs
+    m = merge_smld(sm([PackedFrameEmitter(1, 1, 10)], 10), sm([PackedFrameEmitter(1, 1, 10)], 10);
+                   adjust_frames = true)
+    @test (m.emitters[2].frame, m.emitters[2].time_ms) == (11, 110)
+
+    # A dataset the merge did not set is refused, even when its own setter kept it
+    @test_throws ArgumentError merge_smld(sm([BlockDatasetEmitter(1, 1)], 10_000), sm([BlockDatasetEmitter(1, 1)], 10);
+                                          adjust_frames = true, adjust_datasets = true)
+
+    # A getter that writes writes only into the copy
+    src = LookedUpEmitter(7, 1, false)
+    m = merge_smld(sm([LookedUpEmitter(1, 1, false)], 10), sm([src], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17 && !getfield(src, :looked_up)
+    src = SeenFrameEmitter(7, 1)
+    m = merge_smld(sm([SeenFrameEmitter(1, 1)], 10), sm([src], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17 && isempty(getfield(src, :seen))
+
+    # A const frame beside an unset trailing cache moves, sharing the model
+    model = [1.0]
+    src = ConstFrameCacheEmitter(7, 1, model)
+    m = merge_smld(sm([ConstFrameCacheEmitter(1, 1, model)], 10), sm([src], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17 && m.emitters[2].model === model && !isdefined(m.emitters[2], :cache)
+    m = merge_smld(sm([ConstFrameCacheEmitter(1, 1, model)], 10), sm([src], 10); adjust_datasets = true)
+    @test m.emitters[2].dataset == 2 && m.emitters[2].model === model
+
+    # The exact sum is checked against the field that stores it, at any BigFloat precision
+    m = merge_smld(sm([ImportedFrameEmitter(1.0, 1)], 2^24), sm([ImportedFrameEmitter(0.0, 1)], 1);
+                   adjust_frames = true)
+    @test m.emitters[2].frame === 16_777_217.0
+    m = setprecision(BigFloat, 24) do
+        merge_smld(sm([Float64FrameEmitter(1.0, 1)], 2^24), sm([Float64FrameEmitter(1.0, 1)], 1);
+                   adjust_frames = true)
+    end
+    @test m.emitters[2].frame === 16_777_217.0
+
+    # A moved number that cannot be read back is an error, not a result
+    @test_throws BoundsError merge_smld(sm([TableFrameEmitter(1, 1)], 10), sm([TableFrameEmitter(7, 1)], 10);
+                                        adjust_frames = true)
+end
+
+mutable struct ConstHoleThenModel <: SMLMCore.AbstractEmitter
+    frame::Int
+    dataset::Int
+    const id::Int
+    cache::Vector{Float64}
+    model::Vector{Float64}
+    ConstHoleThenModel(f, d, id, m) = (e = new(f, d, id); setfield!(e, :model, m); e)
+end
+struct NaNCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Float64
+    n_datasets::Float64
+    metadata::Dict{String,Any}
+end
+
+@testset "merge_smld keeps a set field after an unset one, and a NaN count in any order" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf) = BasicSMLD(v, cam, nf, 1, Dict{String,Any}())
+    m = merge_smld(sm([ConstHoleThenModel(1, 1, 5, [1.0])], 10), sm([ConstHoleThenModel(7, 1, 6, [2.0])], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame == 17 && m.emitters[2].model == [2.0] && m.emitters[2].id == 6
+    @test !isdefined(m.emitters[2], :cache)
+
+    fe = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    nc(nf) = NaNCountSMLD([fe], cam, nf, 1.0, Dict{String,Any}())
+    @test isnan(merge_smld(nc(10.0), nc(NaN)).n_frames)
+    @test isnan(merge_smld(nc(NaN), nc(10.0)).n_frames)
+end
+
+# Round six: an immutable type whose getter maps the stored frame; a setter that forwards to a
+# helper typed by value, also when defined in Base; a getter that refreshes the frame when the
+# dataset is read; frame fields of union and abstract types; a dataset that becomes unreadable;
+# a const frame before an unset cache and a set measurement
+struct SentinelImmutable <: SMLMCore.AbstractEmitter
+    frame::Int            # 0: frame 1
+    dataset::Int
+end
+Base.getproperty(e::SentinelImmutable, s::Symbol) =
+    s === :frame && getfield(e, :frame) == 0 ? 1 : getfield(e, s)
+struct ZeroBasedEmitter <: SMLMCore.AbstractEmitter
+    frame::UInt16         # zero-based
+    dataset::Int
+end
+Base.getproperty(e::ZeroBasedEmitter, s::Symbol) =
+    s === :frame ? getfield(e, :frame) + UInt16(1) : getfield(e, s)
+mutable struct ForwardingSetterEmitter <: SMLMCore.AbstractEmitter
+    frame::Int32
+    dataset::Int
+    time_ms::Int
+end
+Base.setproperty!(e::ForwardingSetterEmitter, s::Symbol, v) = _store_value!(e, s, v)
+_store_value!(e, s, v::Int) = (s === :frame && setfield!(e, :time_ms, 10v);
+                               setfield!(e, s, convert(fieldtype(typeof(e), s), v)))
+_store_value!(e, s, v) = setfield!(e, s, convert(fieldtype(typeof(e), s), v))
+mutable struct BaseSetterEmitter <: SMLMCore.AbstractEmitter
+    frame::Int32
+    dataset::Int
+    time_ms::Int
+end
+@eval Base setproperty!(e::$BaseSetterEmitter, s::Symbol, v::Int) =
+    (s === :frame && setfield!(e, :time_ms, 10v); setfield!(e, s, convert(fieldtype(typeof(e), s), v)))
+mutable struct RowCacheEmitter <: SMLMCore.AbstractEmitter
+    row::Int              # the imported row, read back into frame and dataset
+    frame::Int
+    dataset::Int
+end
+Base.getproperty(e::RowCacheEmitter, s::Symbol) = s === :dataset ?
+    (setfield!(e, :frame, getfield(e, :row)); setfield!(e, :dataset, 1); 1) : getfield(e, s)
+mutable struct MissingFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Union{Missing,Int}
+    dataset::Int
+end
+mutable struct AnyFrameEmitter <: SMLMCore.AbstractEmitter
+    frame
+    dataset::Int
+end
+mutable struct RealFrameEmitter <: SMLMCore.AbstractEmitter
+    frame::Real
+    dataset::Int
+end
+mutable struct LookedUpDatasetEmitter <: SMLMCore.AbstractEmitter
+    frame::Int
+end
+Base.getproperty(e::LookedUpDatasetEmitter, s::Symbol) =
+    s === :dataset ? Union{Nothing,Int}[nothing][getfield(e, :frame)] : getfield(e, s)
+mutable struct ConstFrameHoleMeasurement <: SMLMCore.AbstractEmitter
+    const frame::Int
+    dataset::Int
+    cache::Vector{Float64}
+    photons::Float64
+    ConstFrameHoleMeasurement(f, d, p) = (e = new(f, d); setfield!(e, :photons, p); e)
+end
+
+@testset "merge_smld checks public numbers, calls setters as 0.1.0 did, keeps field types" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf, nd = 1) = BasicSMLD(v, cam, nf, nd, Dict{String,Any}())
+
+    # A getter that maps the stored frame is refused rather than giving the wrong public frame
+    @test_throws ArgumentError merge_smld(sm([SentinelImmutable(1, 1)], 10), sm([SentinelImmutable(0, 1)], 10);
+                                          adjust_frames = true)
+    m = merge_smld(sm([ZeroBasedEmitter(0, 1)], 10), sm([ZeroBasedEmitter(0, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 11
+    @test_throws ArgumentError merge_smld(sm([ZeroBasedEmitter(0, 1)], 65_535), sm([ZeroBasedEmitter(0, 1)], 1);
+                                          adjust_frames = true)
+
+    # The setter is given 0.1.0's sum, so a helper typed by value runs as before
+    for E in (ForwardingSetterEmitter, BaseSetterEmitter)
+        m = merge_smld(sm([E(1, 1, 10)], 10), sm([E(1, 1, 10)], 10); adjust_frames = true)
+        @test (m.emitters[2].frame, m.emitters[2].time_ms) == (11, 110)
+    end
+
+    # A getter that resets the frame when the dataset is read is caught on the second read
+    @test_throws ArgumentError merge_smld(sm([RowCacheEmitter(1, 1, 1)], 10), sm([RowCacheEmitter(1, 1, 1)], 10);
+                                          adjust_frames = true)
+
+    # A frame field of a union or abstract type keeps the sum's own type, as in 0.1.0
+    m = merge_smld(sm([MissingFrameEmitter(1, 1)], 10), sm([MissingFrameEmitter(1, 1), MissingFrameEmitter(missing, 1)], 10);
+                   adjust_frames = true)
+    @test m.emitters[2].frame === 11 && m.emitters[3].frame === missing
+    m = merge_smld(sm([AnyFrameEmitter(1, 1)], 10), sm([AnyFrameEmitter(1f0, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame === 11f0
+    m = merge_smld(sm([RealFrameEmitter(1, 1)], 10), sm([RealFrameEmitter(1f0, 1)], 10); adjust_frames = true)
+    @test m.emitters[2].frame === 11f0
+
+    # A number that could be read before the move and cannot after it is refused
+    @test_throws ArgumentError merge_smld(sm([LookedUpDatasetEmitter(1)], 10), sm([LookedUpDatasetEmitter(1)], 10);
+                                          adjust_frames = true)
+
+    # A const frame before an unset cache and a set measurement moves, keeping both
+    m = merge_smld(sm([ConstFrameHoleMeasurement(1, 1, 1.0)], 10), sm([ConstFrameHoleMeasurement(1, 1, 4321.0)], 10);
+                   adjust_frames = true)
+    @test (m.emitters[2].frame, m.emitters[2].photons) == (11, 4321.0) && !isdefined(m.emitters[2], :cache)
+
+    # cat_smld finds the same exact count as merge_smld
+    fe = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame = 16_777_217)
+    rc(nf) = RealCountSMLD([fe], cam, nf, 1, Dict{String,Any}())
+    @test cat_smld(rc(16_777_217), rc(16_777_216f0)).n_frames == 16_777_217
+    @test merge_smld(rc(16_777_217), rc(16_777_216f0)).n_frames == 16_777_217
+
+    # A fractional count that cannot be summed exactly throws
+    fc(nf) = FloatCountSMLD(Emitter2DFit{Float64}[], cam, nf, 1f0, Dict{String,Any}())
+    @test_throws InexactError merge_smld(fc(0.75f0), fc(16_777_216f0); adjust_frames = true)
+end
+
+mutable struct ConstAfterHole <: SMLMCore.AbstractEmitter
+    frame::Int
+    cache::Vector{Float64}
+    const dataset::Int
+    ConstAfterHole(f) = new(f)                     # cache unset, before the const dataset
+    ConstAfterHole(f, d) = new(f, Float64[], d)
+end
+mutable struct UnsetFrameObject <: SMLMCore.AbstractEmitter
+    frame::Integer
+    dataset::Int
+    UnsetFrameObject(d) = (e = new(); setfield!(e, :dataset, d); e)
+end
+struct Int32CountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Int32
+    n_datasets::Int32
+    metadata::Dict{String,Any}
+end
+struct FloatDatasetSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}
+    camera::SMLMCore.AbstractCamera
+    n_frames::Int
+    n_datasets::Float32
+    metadata::Dict{String,Any}
+end
+
+@testset "merge_smld: const after a hole, an unset frame, Int32 counts, dataset count read-back" begin
+    cam = IdealCamera(64, 64, 0.1)
+    sm(v, nf) = BasicSMLD(v, cam, nf, 1, Dict{String,Any}())
+
+    # with every field set, a const dataset moves through `new`
+    m = merge_smld(sm([ConstAfterHole(1, 1)], 10), sm([ConstAfterHole(7, 1)], 10); adjust_datasets = true)
+    @test m.emitters[2].dataset == 2
+    # an unset field before a const one: deep-copied, the frame moves, the const dataset cannot
+    m = merge_smld(sm([ConstAfterHole(1)], 10), sm([ConstAfterHole(7)], 10); adjust_frames = true)
+    @test m.emitters[2].frame == 17 && !isdefined(m.emitters[2], :cache)
+    @test_throws ArgumentError merge_smld(sm([ConstAfterHole(1)], 10), sm([ConstAfterHole(7)], 10);
+                                          adjust_datasets = true)
+
+    # an unset frame field cannot be moved
+    @test_throws ArgumentError merge_smld(sm([UnsetFrameObject(1)], 10), sm([UnsetFrameObject(1)], 10);
+                                          adjust_frames = true)
+
+    # Int32 counts move numbers by an Int, so a setter for Int runs as in 0.1.0
+    i32(v) = Int32CountSMLD(v, cam, Int32(10), Int32(1), Dict{String,Any}())
+    m = merge_smld(i32([PackedFrameEmitter(1, 1, 10)]), i32([PackedFrameEmitter(1, 1, 10)]); adjust_frames = true)
+    @test (m.emitters[2].frame, m.emitters[2].time_ms) == (11, 110)
+
+    # a dataset count the result type cannot hold exactly throws
+    fe = Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    fd(nd) = FloatDatasetSMLD([fe], cam, 1, nd, Dict{String,Any}())
+    @test_throws InexactError merge_smld(fd(Float32(2^24)), fd(1f0); adjust_datasets = true)
 end

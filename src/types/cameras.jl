@@ -7,25 +7,37 @@ A concrete camera type has the fields `pixel_edges_x` and `pixel_edges_y`: the p
 increasing, `N + 1` of them for `N` pixels, starting at the camera's top-left corner, `(0, 0)`.
 Pixels need not be uniform. Constructors do not check that the edges increase from 0;
 `physical_to_pixel*` and the uniform-pixel formulas assume it, and the cameras' displays assume
-uniform pixels (they report the first pixel's width).
-[Pixels and coordinates](@ref) gives the convention.
+uniform pixels (they report the first pixel's width). A camera of a crop of the sensor is the
+exception: its edges start at the crop's corner in sensor µm, so for uniform square pixels
+`physical_to_pixel*` give sensor pixel numbers for it. [Pixels and coordinates](@ref) gives the
+convention.
 """
 abstract type AbstractCamera end
 
+# Pixel counts must not be negative: `1:-1` would silently give a camera with no pixels.
+_check_count(nx, ny) = (nx >= 0 && ny >= 0) ||
+    throw(ArgumentError("a camera needs pixel counts of 0 or more, not ($nx, $ny)"))
+
 # Edges of `length(centers)` pixels of width `pixel_size` (µm), the first at 0, in the type of
-# `pixel_size`. Only the length of `centers` is used.
+# `pixel_size`. `centers` numbers a whole sensor's pixels from 0 or from 1; any other start
+# would be a crop, whose edges do not start at 0, so it is refused.
 function compute_edges_1d(centers::AbstractUnitRange, pixel_size::T) where T<:Real
+    first(centers) in (0, 1) || throw(ArgumentError(
+        "pixel range $centers starts at $(first(centers)): a pixel range numbers a whole " *
+        "sensor's pixels from 0 or from 1, and its edges start at 0 µm. For a cropped camera, " *
+        "pass the crop's pixel edges in µm: IdealCamera(pixel_edges_x, pixel_edges_y)"))
     n_centers = length(centers)
     edges = Vector{T}(undef, n_centers + 1)
-    
+
     # First edge starts at 0
     edges[1] = zero(T)
-    
-    # Each subsequent edge is one pixel_size further
+
+    # Each subsequent edge is one pixel_size further; whole-number edges are checked, so one that
+    # does not fit `T` throws instead of wrapping
     for i in 1:n_centers
-        edges[i + 1] = T(i) * pixel_size
+        edges[i + 1] = T <: Integer ? Base.checked_mul(T(i), pixel_size) : T(i) * pixel_size
     end
-    
+
     return edges
 end
 
@@ -36,8 +48,9 @@ Return the pixel edges in x and y (µm) of `length(centers_x)` × `length(center
 `pixel_size` µm, the first edge at 0.
 
 `pixel_size` is a number (square pixels) or a tuple `(size_x, size_y)` (rectangular pixels).
-Only the lengths of `centers_x` and `centers_y` (`AbstractUnitRange`s) are used. Each edge
-vector has the type of its pixel size.
+`centers_x` and `centers_y` (`AbstractUnitRange`s) number a whole sensor's pixels from 0 or
+from 1, so `0:2` and `1:3` give the same edges; a range that starts anywhere else throws an
+`ArgumentError`. Each edge vector has the type of its pixel size.
 
 # Example
 ```jldoctest
@@ -63,20 +76,25 @@ end
 A camera with a regular pixel grid and Poisson noise only, defined by its pixel edges.
 
 # Fields
-- `pixel_edges_x::Vector{T}`: pixel edges in x (µm), from 0, one more than the number of pixels
-- `pixel_edges_y::Vector{T}`: pixel edges in y (µm), from 0, one more than the number of pixels
+- `pixel_edges_x::Vector{T}`: pixel edges in x (µm), one more than the number of pixels; from 0
+  for a whole sensor, from the crop's corner for a crop
+- `pixel_edges_y::Vector{T}`: pixel edges in y (µm), likewise
 
-Pixel `(x, y) = (col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm, where `Δx` and
-`Δy` are the pixel sizes; see [Pixels and coordinates](@ref).
+Pixel `(x, y) = (col, row)` is centered at `(x0 + (col - 0.5)·Δx, y0 + (row - 0.5)·Δy)` µm,
+where `Δx` and `Δy` are the pixel sizes and `(x0, y0)` the first edges (0 for a whole sensor,
+the crop's corner for a crop); see [Pixels and coordinates](@ref).
 
 # Constructors
 - `IdealCamera(nx, ny, pixel_size)`: `nx` × `ny` pixels of `pixel_size` µm at the sample.
   `pixel_size` is a number (square pixels) or a tuple `(size_x, size_y)` of one type
   (rectangular pixels); `T` is its type.
-- `IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)`: the same, with the pixel counts
-  given as `AbstractUnitRange`s. Only their lengths are used; the edges always start at 0, so
-  `101:612` gives the same camera as `1:512`.
+- `IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)`: the same, with the whole
+  sensor's pixels numbered by `AbstractUnitRange`s from 0 or from 1, so `0:511` and `1:512`
+  give the same camera as `512`. A range that starts anywhere else throws an `ArgumentError`:
+  a camera's edges start at 0, so a crop such as `101:612` is not a range camera.
 - `IdealCamera(pixel_edges_x, pixel_edges_y)`: from the edges themselves (µm, `Vector{T}`).
+  A cropped camera is built this way, from the crop's edges; `physical_to_pixel*` assume edges
+  from 0 (see [Pixels and coordinates](@ref)).
 
 # Example
 ```jldoctest
@@ -117,51 +135,48 @@ function IdealCamera(pixel_centers_x::AbstractUnitRange,
 end
 
 function IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::T) where T<:Real
+    _check_count(n_pixels_x, n_pixels_y)
     pixel_centers_x = 1:n_pixels_x
     pixel_centers_y = 1:n_pixels_y
     return IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)
 end
 
 function IdealCamera(n_pixels_x::Integer, n_pixels_y::Integer, pixel_size::Tuple{T, T}) where T<:Real
+    _check_count(n_pixels_x, n_pixels_y)
     pixel_centers_x = 1:n_pixels_x
     pixel_centers_y = 1:n_pixels_y
     return IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)
 end
 
 
+# For display: the pixel count along one side, the first pixel's width (cameras are shown as
+# uniform; `nothing` for a side with no pixels), the side's extent, and the pixel size as text.
+_shown_count(edges) = max(length(edges) - 1, 0)
+_shown_width(edges) = length(edges) < 2 ? nothing : round(edges[2] - edges[1], digits=4)
+_shown_extent(edges) = length(edges) < 2 ? 0 : round(edges[end] - edges[1], digits=2)
+function _shown_pixel_size(px, py, sep, none)
+    (px === nothing || py === nothing) && return none
+    return px ≈ py ? "$(px)$(sep)μm" : "$(px)$(sep)×$(sep)$(py)$(sep)μm"
+end
+
 # Standard show method (used in arrays and collections)
 function Base.show(io::IO, camera::IdealCamera{T}) where T
-    n_pixels_x = length(camera.pixel_edges_x) - 1
-    n_pixels_y = length(camera.pixel_edges_y) - 1
-    pixel_size_x = round(camera.pixel_edges_x[2] - camera.pixel_edges_x[1], digits=4)
-    pixel_size_y = round(camera.pixel_edges_y[2] - camera.pixel_edges_y[1], digits=4)
-    
-    if pixel_size_x ≈ pixel_size_y
-        print(io, "IdealCamera{$T}($(n_pixels_x)×$(n_pixels_y), $(pixel_size_x)μm)")
-    else
-        print(io, "IdealCamera{$T}($(n_pixels_x)×$(n_pixels_y), $(pixel_size_x)×$(pixel_size_y)μm)")
-    end
+    nx, ny = _shown_count(camera.pixel_edges_x), _shown_count(camera.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(camera.pixel_edges_x), _shown_width(camera.pixel_edges_y),
+                              "", "no pixels")
+    print(io, "IdealCamera{$T}($(nx)×$(ny), $(psize))")
 end
 
 # Detailed show method (used at REPL and when explicitly showing)
 function Base.show(io::IO, ::MIME"text/plain", camera::IdealCamera{T}) where T
-    n_pixels_x = length(camera.pixel_edges_x) - 1
-    n_pixels_y = length(camera.pixel_edges_y) - 1
-    pixel_size_x = round(camera.pixel_edges_x[2] - camera.pixel_edges_x[1], digits=4)
-    pixel_size_y = round(camera.pixel_edges_y[2] - camera.pixel_edges_y[1], digits=4)
-    
-    x_size = round(camera.pixel_edges_x[end] - camera.pixel_edges_x[1], digits=2)
-    y_size = round(camera.pixel_edges_y[end] - camera.pixel_edges_y[1], digits=2)
-    
+    nx, ny = _shown_count(camera.pixel_edges_x), _shown_count(camera.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(camera.pixel_edges_x), _shown_width(camera.pixel_edges_y),
+                              " ", "none (no pixels)")
+    x_size, y_size = _shown_extent(camera.pixel_edges_x), _shown_extent(camera.pixel_edges_y)
+
     println(io, "IdealCamera{$T} with:")
-    println(io, "  Dimensions: $(n_pixels_x) × $(n_pixels_y) pixels")
-    
-    if pixel_size_x ≈ pixel_size_y
-        println(io, "  Pixel size: $(pixel_size_x) μm")
-    else
-        println(io, "  Pixel size: $(pixel_size_x) × $(pixel_size_y) μm")
-    end
-    
+    println(io, "  Dimensions: $(nx) × $(ny) pixels")
+    println(io, "  Pixel size: $(psize)")
     print(io, "  Field of view: $(x_size) × $(y_size) μm")
 end
 
@@ -185,16 +200,18 @@ checked for orientation: a transposed map is accepted silently. [sCMOS calibrati
 the signal chain these parameters describe.
 
 # Constructors
-- `SCMOSCamera(nx, ny, pixel_size, readnoise; offset=zero(T), gain=one(T), qe=one(T))`: `nx` ×
-  `ny` pixels of `pixel_size` µm at the sample, a number or a tuple `(size_x, size_y)`.
-- `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset=zero(T), gain=one(T), qe=one(T))`:
-  from pixel edges (µm, `Vector{T}`), which need not be uniform; `readnoise` is required.
+- `SCMOSCamera(nx, ny, pixel_size, readnoise; offset=0, gain=1, qe=1)`: `nx` × `ny` pixels of
+  `pixel_size` µm at the sample, a number or a tuple `(size_x, size_y)`.
+- `SCMOSCamera(pixel_edges_x, pixel_edges_y; readnoise, offset=0, gain=1, qe=1)`: from pixel
+  edges (µm, vectors), which need not be uniform; `readnoise` is required.
 
-`pixel_size` (or the edges), `readnoise`, `offset`, `gain` and `qe` share one number type `T`,
-the type of `pixel_size`: write `offset = 100.0`, not `100`, and pass maps as `Matrix{T}`. A call
-that mixes number types fails: with an `UndefVarError` (`T` not defined) when scalars of
-different types are passed positionally, a `MethodError` for a map of another element type, and
-a `TypeError` for a keyword. A map of the wrong size throws a `DimensionMismatch`.
+Each calibration value is a number or a map (a matrix). The camera's number type `T` is the
+promoted type of the numbers given: the pixel size (or the edges), `readnoise`, and `offset`,
+`gain` and `qe` when they are passed (a map counts by its element type). All `Float32` gives
+`SCMOSCamera{Float32}`; whole numbers take the type of the rest (`offset = 100` with a `Float64`
+pixel size gives `100.0`); a mix of `Float32` and `Float64` gives `Float64`. Every value is
+converted to `T`, and a map that is already a `Matrix{T}` is stored as given, not copied. A map
+of the wrong size throws a `DimensionMismatch`.
 
 # Example
 A 2048 × 2048 sensor of 6.5 µm pixels behind a 100× objective has pixels of 0.065 µm at the
@@ -232,53 +249,89 @@ struct SCMOSCamera{T<:Real} <: AbstractCamera
     qe::Union{T, Matrix{T}}
 end
 
+# A calibration value of an sCMOS camera: one number for every pixel, or a map of size (ny, nx).
+const _SCMOSParam = Union{Real, AbstractMatrix{<:Real}}
+
+# The number type a constructor argument brings to the camera's `T`; an argument not given
+# (`nothing`) brings none.
+_camera_eltype(x::Real) = typeof(x)
+_camera_eltype(x::Tuple{Real, Real}) = promote_type(typeof(x[1]), typeof(x[2]))
+_camera_eltype(x::AbstractArray{<:Real}) = _number_type(eltype(x))
+_camera_eltype(::Nothing) = Union{}
+# An element type that is a union of number types (`Union{Float32,Float64}`) brings their
+# promotion.
+_number_type(T::Type) = T isa Union ? promote_type(Base.uniontypes(T)...) : T
+
+# Uniform edges `0, p, 2p, ..., n·p` in `T`: whole numbers exactly, with a check that each fits;
+# floats as a range, as in 0.1.0.
+function _uniform_edges(::Type{T}, n::Integer, p) where {T}
+    T <: Integer && return T[Base.checked_mul(convert(T, i), p) for i in 0:n]
+    return collect(T, range(zero(T), n * p, length = n + 1))
+end
+
+# A vector or map as a `Vector{T}` or `Matrix{T}`, its values in order whatever its indices
+# (an offset array, say); one that already is one is kept as given.
+_as_vector(::Type{T}, v::Vector{T}) where {T} = v
+_as_vector(::Type{T}, v::AbstractVector) where {T} = copyto!(Vector{T}(undef, length(v)), v)
+_as_matrix(::Type{T}, m::Matrix{T}) where {T} = m
+_as_matrix(::Type{T}, m::AbstractMatrix) where {T} = copyto!(Matrix{T}(undef, size(m)), m)
+
+# A calibration value converted to the camera's `T`; `default` when not given.
+_camera_param(::Type{T}, x::Real, default) where {T} = convert(T, x)
+_camera_param(::Type{T}, x::AbstractMatrix{<:Real}, default) where {T} = _as_matrix(T, x)
+_camera_param(::Type{T}, ::Nothing, default) where {T} = convert(T, default)
+
+# Pixel size in x and y, in the camera's `T`.
+_pixel_sizes(::Type{T}, p::Real) where {T} = (convert(T, p), convert(T, p))
+_pixel_sizes(::Type{T}, p::Tuple{Real, Real}) where {T} = (convert(T, p[1]), convert(T, p[2]))
+
 function SCMOSCamera(
     nx::Integer,
     ny::Integer,
-    pixel_size::Union{T, Tuple{T,T}},
-    readnoise::Union{T, Matrix{T}};
-    offset::Union{T, Matrix{T}} = zero(T),
-    gain::Union{T, Matrix{T}} = one(T),
-    qe::Union{T, Matrix{T}} = one(T)
-) where T<:Real
-
-    # Compute pixel edges
-    if pixel_size isa Tuple
-        edges_x = collect(range(zero(T), nx * pixel_size[1], length=nx+1))
-        edges_y = collect(range(zero(T), ny * pixel_size[2], length=ny+1))
-    else
-        edges_x = collect(range(zero(T), nx * pixel_size, length=nx+1))
-        edges_y = collect(range(zero(T), ny * pixel_size, length=ny+1))
-    end
-
-    # Validate dimensions
-    _validate_camera_param(offset, nx, ny, "offset")
-    _validate_camera_param(gain, nx, ny, "gain")
-    _validate_camera_param(readnoise, nx, ny, "readnoise")
-    _validate_camera_param(qe, nx, ny, "qe")
-
-    return SCMOSCamera{T}(edges_x, edges_y, offset, gain, readnoise, qe)
+    pixel_size::Union{Real, Tuple{Real, Real}},
+    readnoise::_SCMOSParam;
+    offset::Union{_SCMOSParam, Nothing} = nothing,
+    gain::Union{_SCMOSParam, Nothing} = nothing,
+    qe::Union{_SCMOSParam, Nothing} = nothing
+)
+    T = promote_type(_camera_eltype(pixel_size), _camera_eltype(readnoise),
+                     _camera_eltype(offset), _camera_eltype(gain), _camera_eltype(qe))
+    _check_count(nx, ny)
+    px, py = _pixel_sizes(T, pixel_size)
+    # In `T` itself, so whole-number pixel sizes give whole-number edges, as in 0.1.0
+    return _scmos_camera(T, _uniform_edges(T, nx, px), _uniform_edges(T, ny, py),
+                         readnoise, offset, gain, qe)
 end
 
 function SCMOSCamera(
-    pixel_edges_x::Vector{T},
-    pixel_edges_y::Vector{T};
-    readnoise::Union{T, Matrix{T}},
-    offset::Union{T, Matrix{T}} = zero(T),
-    gain::Union{T, Matrix{T}} = one(T),
-    qe::Union{T, Matrix{T}} = one(T)
-) where T<:Real
+    pixel_edges_x::AbstractVector{<:Real},
+    pixel_edges_y::AbstractVector{<:Real};
+    readnoise::_SCMOSParam,
+    offset::Union{_SCMOSParam, Nothing} = nothing,
+    gain::Union{_SCMOSParam, Nothing} = nothing,
+    qe::Union{_SCMOSParam, Nothing} = nothing
+)
+    T = promote_type(_camera_eltype(pixel_edges_x), _camera_eltype(pixel_edges_y),
+                     _camera_eltype(readnoise), _camera_eltype(offset), _camera_eltype(gain),
+                     _camera_eltype(qe))
+    return _scmos_camera(T, _as_vector(T, pixel_edges_x), _as_vector(T, pixel_edges_y),
+                         readnoise, offset, gain, qe)
+end
 
-    nx = length(pixel_edges_x) - 1
-    ny = length(pixel_edges_y) - 1
-
-    # Validate dimensions
+# Check the maps' sizes against the edges and build the camera in `T`.
+function _scmos_camera(::Type{T}, edges_x::Vector{T}, edges_y::Vector{T},
+                       readnoise, offset, gain, qe) where {T}
+    (isempty(edges_x) || isempty(edges_y)) &&
+        throw(ArgumentError("a camera needs at least one pixel edge on each side (N + 1 for N pixels)"))
+    nx = length(edges_x) - 1
+    ny = length(edges_y) - 1
     _validate_camera_param(offset, nx, ny, "offset")
     _validate_camera_param(gain, nx, ny, "gain")
     _validate_camera_param(readnoise, nx, ny, "readnoise")
     _validate_camera_param(qe, nx, ny, "qe")
-
-    return SCMOSCamera{T}(pixel_edges_x, pixel_edges_y, offset, gain, readnoise, qe)
+    return SCMOSCamera{T}(edges_x, edges_y,
+                          _camera_param(T, offset, 0), _camera_param(T, gain, 1),
+                          _camera_param(T, readnoise, 0), _camera_param(T, qe, 1))
 end
 
 # Validation helper
@@ -288,33 +341,24 @@ function _validate_camera_param(param::AbstractMatrix, nx, ny, name)
     size(param) == (ny, nx) ||
         throw(DimensionMismatch("$name size $(size(param)) must match ($ny, $nx) [rows, cols]"))
 end
-_validate_camera_param(param::Real, nx, ny, name) = nothing
+_validate_camera_param(param::Union{Real, Nothing}, nx, ny, name) = nothing
 
 # Display methods
 function Base.show(io::IO, cam::SCMOSCamera{T}) where T
-    nx = length(cam.pixel_edges_x) - 1
-    ny = length(cam.pixel_edges_y) - 1
-    px = round(cam.pixel_edges_x[2] - cam.pixel_edges_x[1], digits=4)
-    py = round(cam.pixel_edges_y[2] - cam.pixel_edges_y[1], digits=4)
-
-    psize_str = px ≈ py ? "$(px)μm" : "$(px)×$(py)μm"
-    print(io, "SCMOSCamera{$T}($(nx)×$(ny), $(psize_str))")
+    nx, ny = _shown_count(cam.pixel_edges_x), _shown_count(cam.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(cam.pixel_edges_x), _shown_width(cam.pixel_edges_y),
+                              "", "no pixels")
+    print(io, "SCMOSCamera{$T}($(nx)×$(ny), $(psize))")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", cam::SCMOSCamera{T}) where T
-    nx = length(cam.pixel_edges_x) - 1
-    ny = length(cam.pixel_edges_y) - 1
-    px = round(cam.pixel_edges_x[2] - cam.pixel_edges_x[1], digits=4)
-    py = round(cam.pixel_edges_y[2] - cam.pixel_edges_y[1], digits=4)
+    nx, ny = _shown_count(cam.pixel_edges_x), _shown_count(cam.pixel_edges_y)
+    psize = _shown_pixel_size(_shown_width(cam.pixel_edges_x), _shown_width(cam.pixel_edges_y),
+                              " ", "none (no pixels)")
 
     println(io, "SCMOSCamera{$T} with:")
     println(io, "  Dimensions: $(nx) × $(ny) pixels")
-
-    if px ≈ py
-        println(io, "  Pixel size: $(px) μm")
-    else
-        println(io, "  Pixel size: $(px) × $(py) μm")
-    end
+    println(io, "  Pixel size: $(psize)")
 
     # Show parameter types (scalar vs matrix)
     offset_type = cam.offset isa T ? "uniform" : "per-pixel"
