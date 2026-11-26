@@ -216,6 +216,41 @@ end
     end
 end
 
+@testset "Pixel ranges number the whole sensor from 0 or 1" begin
+    # A range from 0 or 1 is the whole sensor, edges from 0 µm, as in 0.1.0
+    ref = IdealCamera(64, 32, 0.1)
+    for (rx, ry) in ((1:64, 1:32), (0:63, 0:31), (Base.OneTo(64), Base.OneTo(32)), (0:63, 1:32))
+        cam = IdealCamera(rx, ry, 0.1)
+        @test cam.pixel_edges_x == ref.pixel_edges_x
+        @test cam.pixel_edges_y == ref.pixel_edges_y
+    end
+    @test IdealCamera(0:63, 0:31, (0.1, 0.2)).pixel_edges_y == IdealCamera(64, 32, (0.1, 0.2)).pixel_edges_y
+    @test compute_bin_edges(0:2, 0:1, 0.5) == compute_bin_edges(1:3, 1:2, 0.5)
+    @test IdealCamera(0, 0, 0.1).pixel_edges_x == [0.0]   # no pixels: 1:0 starts at 1
+
+    # Any other start was silently a camera at 0 µm; it is refused, in each axis and form
+    @test_throws ArgumentError IdealCamera(101:200, 1:100, 0.1)
+    @test_throws ArgumentError IdealCamera(1:100, 101:200, 0.1)
+    @test_throws ArgumentError IdealCamera(2:65, 1:64, (0.1, 0.2))
+    @test_throws ArgumentError IdealCamera(-1:62, 0:63, 0.1)
+    @test_throws ArgumentError compute_bin_edges(65:128, 1:128, 0.12)
+    @test_throws ArgumentError compute_bin_edges(1:3, 3:5, (0.1, 0.2))
+    err = try
+        IdealCamera(101:200, 1:100, 0.1); nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("101:200", err.msg)
+    @test occursin("cropped camera", err.msg)
+    @test occursin("pixel edges", err.msg)
+
+    # A cropped camera is built from its edges
+    crop = IdealCamera(collect(range(7.68, step = 0.12, length = 65)), collect(range(0.0, step = 0.12, length = 129)))
+    @test crop.pixel_edges_x[1] == 7.68
+    @test length(crop.pixel_edges_x) == 65
+end
+
 @testset "SCMOSCamera" begin
     @testset "Construction with scalar parameters" begin
         # Minimal constructor (readnoise only)

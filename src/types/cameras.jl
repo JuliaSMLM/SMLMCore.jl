@@ -13,8 +13,13 @@ uniform pixels (they report the first pixel's width).
 abstract type AbstractCamera end
 
 # Edges of `length(centers)` pixels of width `pixel_size` (µm), the first at 0, in the type of
-# `pixel_size`. Only the length of `centers` is used.
+# `pixel_size`. `centers` numbers a whole sensor's pixels from 0 or from 1; any other start
+# would be a crop, whose edges do not start at 0, so it is refused.
 function compute_edges_1d(centers::AbstractUnitRange, pixel_size::T) where T<:Real
+    first(centers) in (0, 1) || throw(ArgumentError(
+        "pixel range $centers starts at $(first(centers)): a pixel range numbers a whole " *
+        "sensor's pixels from 0 or from 1, and its edges start at 0 µm. For a cropped camera, " *
+        "pass the crop's pixel edges in µm: IdealCamera(pixel_edges_x, pixel_edges_y)"))
     n_centers = length(centers)
     edges = Vector{T}(undef, n_centers + 1)
     
@@ -36,8 +41,9 @@ Return the pixel edges in x and y (µm) of `length(centers_x)` × `length(center
 `pixel_size` µm, the first edge at 0.
 
 `pixel_size` is a number (square pixels) or a tuple `(size_x, size_y)` (rectangular pixels).
-Only the lengths of `centers_x` and `centers_y` (`AbstractUnitRange`s) are used. Each edge
-vector has the type of its pixel size.
+`centers_x` and `centers_y` (`AbstractUnitRange`s) number a whole sensor's pixels from 0 or
+from 1, so `0:2` and `1:3` give the same edges; a range that starts anywhere else throws an
+`ArgumentError`. Each edge vector has the type of its pixel size.
 
 # Example
 ```jldoctest
@@ -73,10 +79,13 @@ Pixel `(x, y) = (col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)
 - `IdealCamera(nx, ny, pixel_size)`: `nx` × `ny` pixels of `pixel_size` µm at the sample.
   `pixel_size` is a number (square pixels) or a tuple `(size_x, size_y)` of one type
   (rectangular pixels); `T` is its type.
-- `IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)`: the same, with the pixel counts
-  given as `AbstractUnitRange`s. Only their lengths are used; the edges always start at 0, so
-  `101:612` gives the same camera as `1:512`.
+- `IdealCamera(pixel_centers_x, pixel_centers_y, pixel_size)`: the same, with the whole
+  sensor's pixels numbered by `AbstractUnitRange`s from 0 or from 1, so `0:511` and `1:512`
+  give the same camera as `512`. A range that starts anywhere else throws an `ArgumentError`:
+  a camera's edges start at 0, so a crop such as `101:612` is not a range camera.
 - `IdealCamera(pixel_edges_x, pixel_edges_y)`: from the edges themselves (µm, `Vector{T}`).
+  A cropped camera is built this way, from the crop's edges; `physical_to_pixel*` assume edges
+  from 0 (see [Pixels and coordinates](@ref)).
 
 # Example
 ```jldoctest
