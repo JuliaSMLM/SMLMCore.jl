@@ -41,8 +41,8 @@ magnification. A 6.5 µm sensor pixel behind a 100× objective is 0.065 µm.
 
 Pixels are labeled `(x, y) = (col, row)`; arrays are indexed `[row, col]`.
 
-- The origin, `(0, 0)` µm, is the top-left corner of the camera. x increases to the right, along
-  the columns; y increases downward, along the rows.
+- The origin, `(0, 0)` µm, is the top-left corner of the sensor (of a whole-sensor camera). x
+  increases to the right, along the columns; y increases downward, along the rows.
 - Columns and rows are numbered from 1, so pixel `(1, 1)` is the top-left pixel.
 - A camera stores its pixel edges, `pixel_edges_x` and `pixel_edges_y`: `N + 1` edges per axis
   for `N` pixels, increasing, from 0 for a whole sensor (a crop's start at its corner, below).

@@ -40,10 +40,12 @@ those versions define the same types: Pkg reports unsatisfiable requirements for
   types with ground truth, as SMLMSim does, stores `photons` before QE.
 - `pixel_size` is the size of a pixel at the sample (the sensor pixel divided by the
   magnification), in µm.
-- The origin, `(0, 0)` µm, is the camera's top-left corner. x runs along the columns and y down
-  the rows.
+- The origin, `(0, 0)` µm, is the sensor's top-left corner. x runs along the columns and y down
+  the rows. A camera of a crop has edges from the crop's corner, in sensor µm.
 - Pixels are labeled `(x, y) = (col, row)`, numbered from 1; arrays are indexed `[row, col]`.
-  With uniform pixels, pixel `(col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm.
+  With uniform pixels, pixel `(col, row)` of a camera is centered at
+  `(x0 + (col - 0.5)·Δx, y0 + (row - 0.5)·Δy)` µm, where `(x0, y0)` are its first edges (0 for
+  a whole sensor).
   In pixel coordinates the top-left pixel's center is `(1, 1)` and the camera's corner is
   `(0.5, 0.5)`.
 - Images and per-pixel arrays are indexed `[row, col] = [y, x]`. An sCMOS calibration map has
@@ -341,12 +343,13 @@ region = filter_roi(smld, (0.0, 2.0), (1.0, 3.0))   # x and y bounds, µm, inclu
   `$name` reads the variable and `$f(x)` calls the caller's `f`, each `$expr` evaluated once
   where `@filter` is called. A name that is neither is read with `getproperty`, which reads a
   property the emitter computes without listing it and otherwise throws its error. `e.name`
-  reads the emitter's property. Operators are never properties. Each name is bound this way
-  before the condition runs, and the condition runs as written, so Julia's own scope rules
-  decide what names it binds itself mean, and its assignments never reach the caller's
-  variables. Other macros expand first; in a nested `@filter`, a free name follows the outer
-  condition. Keyword names, field names and quoted code are not names. The condition gives
-  `true` or `false` (or `1` or `0`).
+  reads the emitter's property. Operators are never properties. A property is read where the
+  condition reaches it, as in 0.1.0 (`photons > 100 && z > 0` stops before `z`); a caller
+  variable is read once, where `@filter` is called. Names the condition binds itself keep
+  Julia's own scope rules, each starting as the property or caller variable of that name, and
+  its assignments never reach the caller's variables. Other macros expand first; in a nested
+  `@filter`, a free name follows the outer condition. Keyword names, field names, types in
+  `x::T` and quoted code are not names. The condition gives `true` or `false` (or `1` or `0`).
 - Properties: `x`, `y`, `z` (3D), `photons`; for the fit types also `bg`, `σ_x`, `σ_y`, `σ_z`,
   `σ_xy`, `σ_xz` and `σ_yz` (3D), `σ_photons`, `σ_bg`, `frame`, `dataset`, `track_id`, `id`.
 - `filter_frames` needs a `frame` field (`Emitter2DFit`, `Emitter3DFit`); `Emitter2D` and
@@ -393,11 +396,10 @@ by_dataset = merge_smld([smld_a, smld_b]; adjust_datasets = true)
   calibration included) and the same emitter type.
 - Renumbering moves each input by the earlier inputs' total `n_frames` (or `n_datasets`), and
   needs a `frame` (or `dataset`) property; `Emitter2D` and `Emitter3D` have neither. The inputs
-  are never modified. A renumbered emitter is rebuilt from the input's fields, so its object
-  fields stay shared with the input; a type with its own `setproperty!` is deep-copied and set
-  through it, both numbers computed first (a setter that changes the other number throws). A
-  move starts from `e.frame` and `e.dataset` for a mutable type and from the fields for an
-  immutable one, as in 0.1.0. Sums, moved numbers and result counts are checked: one that does
+  are never modified. A renumbered emitter shares its object fields with the input; a type with
+  its own `setproperty!` is deep-copied and set through it, both numbers computed first (a
+  setter that changes the other number throws). A move starts from `e.frame` and `e.dataset`
+  (read on a copy) for a mutable type and from the fields for an immutable one, as in 0.1.0. Sums, moved numbers and result counts are checked: one that does
   not fit throws, never wraps or rounds.
 - Metadata is a copy of the first input's, plus `"concatenated_from"` (`cat_smld`) or
   `"merged_from"`, `"frame_adjustment"` and `"dataset_adjustment"` (`merge_smld`). The other

@@ -80,8 +80,9 @@ A camera with a regular pixel grid and Poisson noise only, defined by its pixel 
   for a whole sensor, from the crop's corner for a crop
 - `pixel_edges_y::Vector{T}`: pixel edges in y (µm), likewise
 
-Pixel `(x, y) = (col, row)` is centered at `((col - 0.5)·Δx, (row - 0.5)·Δy)` µm, where `Δx` and
-`Δy` are the pixel sizes; see [Pixels and coordinates](@ref).
+Pixel `(x, y) = (col, row)` is centered at `(x0 + (col - 0.5)·Δx, y0 + (row - 0.5)·Δy)` µm,
+where `Δx` and `Δy` are the pixel sizes and `(x0, y0)` the first edges (0 for a whole sensor,
+the crop's corner for a crop); see [Pixels and coordinates](@ref).
 
 # Constructors
 - `IdealCamera(nx, ny, pixel_size)`: `nx` × `ny` pixels of `pixel_size` µm at the sample.
