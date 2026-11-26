@@ -15,21 +15,32 @@ variable `dataset`, and `\$f(x)` calls the caller's `f`; each `\$expr` is evalua
 `@filter` is called. A name that is neither is read with `getproperty`, so a property that the
 emitter computes without listing it in `propertynames` is still read when no variable of that
 name is defined where `@filter` is called (names Julia exports, such as `time`, count as
-defined), and a missing one throws the error `getproperty` gives. `e.name` reads the emitter's
-property `name`, as in 0.1.0.
+defined), and a missing one throws the error `getproperty` gives. `e` is the emitter itself, so
+`e.name` reads its property `name`, as in 0.1.0, and `f(e)` passes the emitter to `f`; write
+`\$e` for a caller variable named `e`.
 
 A property is read where the condition reaches it, as in 0.1.0, so `photons > 100 && z > 0`
-never reads `z` of an emitter with 100 photons or fewer. A caller variable is read once, where
-`@filter` is called. Names the condition binds itself (an argument of `x -> ...`, a loop or
-`let` variable, a name it assigns) keep Julia's own scope rules, as in
+never reads `z` of an emitter with 100 photons or fewer. The data set is evaluated first, then
+each `\$expr` and each caller variable the condition names, once, where `@filter` is called.
+Names the condition binds itself (an argument of `x -> ...`, a loop or `let` variable, a name
+it assigns, a `where` parameter) keep Julia's own scope rules, as in
 `@filter(smld, all(s -> s < 0.02, (σ_x, σ_y)))`: each such name starts, before the condition
 runs, as the emitter's property or the caller's variable of that name (else `nothing`), and an
 assignment in the condition changes only that binding, never the caller's variable (a name it
-declares `global` is the module's). Operators (`>`, `in`, `&&`) are never properties; keyword
-names, field names, types in `x::T` and quoted code are not names. Other macros in the condition
-expand first. A free name inside a nested `@filter` follows the outer condition, the outer
-emitter's property when it has one. The condition must give `true` or `false` (or `1` or `0`)
-for each emitter.
+declares `global` is the module's). `e` follows the same rules, starting as the emitter: inside
+a construct that binds `e` (`e -> ...`, a generator or loop over `e`, `let e = ...`) it is that
+construct's, and `catch e` or `e = ...` assigns it, as in Julia. Operators (`>`, `in`, `&&`) are
+never properties; keyword names, field names, types in `x::T` (read by Julia where the
+condition runs) and quoted code are not names. Other macros in the condition expand first. A
+free name inside a nested `@filter` follows the outer condition, the outer emitter's property
+when it has one. The condition must give `true` or `false` (or `1` or `0`) for each emitter; a
+condition written as an assignment (`dataset = 1`, for `==`) is refused with an
+`ArgumentError` when the macro expands.
+
+The caller's variables are read outside the function that tests each emitter, so that function
+captures none of them. A `@filter` inside a comprehension or closure of the caller reads them
+inside that closure, which captures them as any Julia closure does: a captured local that the
+caller assigns again later is boxed, slowing the caller (`\$name` does not change this).
 
 The result has a new emitter vector, but its emitters are the input's own mutable objects:
 setting `bright.emitters[1].photons = 0` changes `smld` as well. `deepcopy` the result before
@@ -66,6 +77,9 @@ julia> length(@filter(smld, frame == \$frame))
 ```
 """
 macro filter(smld, condition)
+    # `@filter(smld, dataset = 1)` is a slip for `==`; 0.1.0 wrote 1 into every emitter.
+    condition isa Expr && condition.head === :(=) && throw(ArgumentError(string("@filter: the ",
+        "condition `", condition, "` is an assignment; write `==` to compare")))
     e = gensym(:emitter)
     # `$expr` is the caller's value: bound once, where @filter is called, outside every name the
     # condition binds; a nested @filter's own `$` stay its own.
@@ -73,11 +87,11 @@ macro filter(smld, condition)
     cond = _filter_interpolations!(interpolated, condition, __module__)
     # Other macros expand first, so the names found are those of the code they become.
     cond = macroexpand(__module__, cond; recursive = true)
-    names, binders, assigned = Set{Symbol}(), Set{Symbol}(), Set{Symbol}()
-    _filter_names!(names, binders, assigned, cond)
-    # `e.name` reads the emitter, as in 0.1.0, except where the condition binds `e` itself.
-    :e in assigned || (cond = _filter_emitter_dot(cond, e))
-    skip = Set{Symbol}(first.(interpolated))
+    names, binders = Set{Symbol}(), Set{Symbol}()
+    _filter_names!(names, binders, cond)
+    # `e` is the emitter (so `e.name` reads it, as in 0.1.0), wherever the condition does not
+    # bind `e` itself; the names `$expr` became are the caller's values.
+    skip = push!(Set{Symbol}(first.(interpolated)), :e)
     used = sort!([n for n in union(names, binders) if !(n in skip) && _filter_is_variable(n)])
     # Each name's caller binding is read once, where @filter is called, so the emitter function
     # never captures a caller variable (a caller local captured and assigned later would be
@@ -88,18 +102,22 @@ macro filter(smld, condition)
     # A name the condition never binds is the same name wherever it appears, so each read is
     # replaced in place by its lookup, run only when reached (as 0.1.0 read properties).
     free = Set{Symbol}(n for n in used if !(n in binders))
+    :e in binders || (push!(free, :e); caller[:e] = e)
     cond = _filter_reads(cond, e, free, caller)
     # A name the condition binds somewhere is bound before it runs, and the condition then runs
     # as written inside, so Julia's own scope rules decide what it means where, and assignments
     # reach only these bindings, never the caller's variables.
-    bound = [n for n in used if n in binders]
+    bound = Any[Expr(:(=), n, _filter_value(n, e, caller[n])) for n in used if n in binders]
+    :e in binders && push!(bound, Expr(:(=), :e, e))
     body = isempty(bound) ? cond :
-        Expr(:let, Expr(:block, (Expr(:(=), n, _filter_value(n, e, caller[n])) for n in bound)...),
-             Expr(:let, Expr(:block), cond))
-    call = :($(GlobalRef(@__MODULE__, :_filter_smld))($smld, $e -> $body))
+        Expr(:let, Expr(:block, bound...), Expr(:let, Expr(:block), cond))
+    # The data set is evaluated first, once; then `$expr` and the caller's variables, so a data
+    # set that changes them is seen as it leaves them.
+    s = gensym(:smld)
+    call = :($(GlobalRef(@__MODULE__, :_filter_smld))($s, $e -> $body))
     outer = vcat(Any[Expr(:(=), k, v) for (k, v) in interpolated], reads)
     isempty(outer) || (call = Expr(:let, Expr(:block, outer...), call))
-    return esc(call)
+    return esc(Expr(:let, Expr(:(=), s, smld), call))
 end
 
 # A caller name that is not defined where @filter is called.
@@ -154,7 +172,10 @@ _filter_targets(s::Symbol) = Symbol[s]
 function _filter_targets(ex::Expr)
     if ex.head in (:tuple, :parameters, :block)
         return reduce(vcat, (_filter_targets(a) for a in ex.args); init = Symbol[])
-    elseif ex.head in (:kw, :..., :(=), :where, :outer) || (ex.head === :(::) && length(ex.args) == 2)
+    elseif ex.head === :where  # `f(x::T) where {T<:Real}` binds `T` too
+        params = (t isa Expr && t.head in (:<:, :>:) ? t.args[1] : t for t in ex.args[2:end])
+        return vcat(_filter_targets(ex.args[1]), Symbol[t for t in params if t isa Symbol])
+    elseif ex.head in (:kw, :..., :(=), :outer) || (ex.head === :(::) && length(ex.args) == 2)
         return _filter_targets(ex.args[1])
     elseif ex.head === :meta
         return reduce(vcat, (_filter_targets(a) for a in ex.args[2:end]); init = Symbol[])
@@ -182,10 +203,10 @@ function _filter_scope_names(ex::Expr)
     return Symbol[]
 end
 
-# Every symbol the condition uses as a name (`names`), those it binds anywhere (`binders`), and
-# those it assigns or declares (`assigned`); keyword names, named-tuple entry names, field names,
-# types in `x::T` and `where`, and quoted code are not names.
-function _filter_names!(names, binders, assigned, ex)
+# Every symbol the condition uses as a name (`names`) and those it binds anywhere (`binders`);
+# keyword names, named-tuple entry names, field names, types in `x::T` and `where`, and quoted
+# code are not names.
+function _filter_names!(names, binders, ex)
     if ex isa Symbol
         push!(names, ex)
         return
@@ -196,45 +217,30 @@ function _filter_names!(names, binders, assigned, ex)
     if h === :isdefined
         args[1] isa Symbol && push!(names, args[1])
     elseif h === :kw
-        _filter_names!(names, binders, assigned, args[2])
+        _filter_names!(names, binders, args[2])
     elseif h === :. && length(args) == 2 && args[2] isa QuoteNode
-        _filter_names!(names, binders, assigned, args[1])
+        _filter_names!(names, binders, args[1])
     elseif h === :(::) || h === :where
         # the type is not a name of the condition
-        (h === :where || length(args) == 2) && _filter_names!(names, binders, assigned, args[1])
+        (h === :where || length(args) == 2) && _filter_names!(names, binders, args[1])
     elseif h === :tuple
         for a in args
             entry = a isa Expr && a.head in (:(=), :kw) && a.args[1] isa Symbol
-            _filter_names!(names, binders, assigned, entry ? a.args[2] : a)
+            _filter_names!(names, binders, entry ? a.args[2] : a)
         end
     else
         if h === :(=) || _is_op_assign(h)
-            t = _filter_targets(args[1])
-            union!(binders, t); union!(assigned, t)
+            union!(binders, _filter_targets(args[1]))
         elseif h === :local || h === :global
-            for a in args
-                t = _filter_targets(a)
-                union!(binders, t); union!(assigned, t)
-            end
+            foreach(a -> union!(binders, _filter_targets(a)), args)
         elseif h === :function
             union!(binders, _filter_targets(args[1]))
         else
             union!(binders, _filter_scope_names(ex))
         end
-        foreach(a -> _filter_names!(names, binders, assigned, a), args)
+        foreach(a -> _filter_names!(names, binders, a), args)
     end
     return
-end
-
-# `e.name` as the emitter's property `name`, except inside a construct that binds `e`.
-function _filter_emitter_dot(ex, e::Symbol)
-    ex isa Expr || return ex
-    ex.head in (:quote, :inert) && return ex
-    :e in _filter_scope_names(ex) && return ex
-    if ex.head === :. && length(ex.args) == 2 && ex.args[1] === :e && ex.args[2] isa QuoteNode
-        return Expr(:., e, ex.args[2])
-    end
-    return Expr(ex.head, (_filter_emitter_dot(a, e) for a in ex.args)...)
 end
 
 # Each read of a name in `free` replaced by its lookup, run where it is reached, and
@@ -248,6 +254,7 @@ function _filter_reads(ex, e::Symbol, free::Set{Symbol}, caller)
     rw(a) = _filter_reads(a, e, free, caller)
     if h === :isdefined
         n = args[1]
+        n === :e && n in free && return true
         return n isa Symbol && n in free ?
             :($(GlobalRef(Base, :hasproperty))($e, $(QuoteNode(n))) ||
               $(caller[n]) !== $(GlobalRef(@__MODULE__, :_FILTER_UNDEFINED))) : ex
@@ -276,6 +283,7 @@ end
 # computed but not listed in `propertynames`, or the error for a missing one), evaluated where
 # the read is reached.
 function _filter_lookup(n::Symbol, e::Symbol, c::Symbol)
+    n === :e && return e
     p = QuoteNode(n)
     get = :($(GlobalRef(Base, :getproperty))($e, $p))
     undefined = GlobalRef(@__MODULE__, :_FILTER_UNDEFINED)

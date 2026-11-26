@@ -889,3 +889,84 @@ _filter_global_counter = 0
     @test xs(@filter(s, any(((v::T) where {T<:Real}) -> v > 1, (x,)))) == [1.5]
     @test xs(@filter(s, any((::Float64) -> true, (x,)))) == every
 end
+
+_filter_threshold = 0.0
+@testset "@filter evaluates the data set first, and keeps each binding in its scope" begin
+    cam = IdealCamera(64, 64, 0.1)
+    s = BasicSMLD([Emitter2DFit{Float64}(x, 1.0, 1000.0, 5.0, 0.01, 0.01, 50.0, 2.0)
+                   for x in (1.0, 2.0)], cam, 1, 1)
+    xs(r) = [e.x for e in r.emitters]
+
+    # `e` bound by a generator, a `let` or a `catch` is that construct's own, only inside it
+    e = (x = -1.0,)
+    neighbors = [(x = 2.0,)]
+    @test xs(@filter(s, e.x > 0 && any(e.x > 0 for e in neighbors))) == [1.0, 2.0]
+    @test xs(@filter(s, e.x > 0 && let e = (x = 2.0,); e.x > 0 end)) == [1.0, 2.0]
+    @test xs(@filter(s, try e.x > 0 catch e; false end)) == [1.0, 2.0]
+
+    # A callback's `where T` is its own in its body
+    tiny = BasicSMLD([Emitter2DFit{Float64}(1e-8, 1.0, 1000.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1)
+    @test length(@filter(tiny, any(((v::T) where T) -> v > eps(T), (x,)))) == 1
+    T = Float32
+    @test length(@filter(tiny, any(((v::T) where T) -> v > eps(T), (x,)))) == 1
+
+    # The data set is evaluated before the caller's variables and `$expr` are read
+    next_s() = (global _filter_threshold = 150.0;
+                BasicSMLD([Emitter2DFit{Float64}(1.0, 1.0, 101.0, 5.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1))
+    @test isempty(@filter(next_s(), photons > _filter_threshold).emitters)
+    global _filter_threshold = 0.0
+    @test isempty(@filter(next_s(), photons > $(_filter_threshold)).emitters)
+end
+
+bright_emitter(em) = em.photons > 1000
+_filter_gg = 2
+@testset "@filter: e is the emitter wherever the condition does not bind it" begin
+    cam = IdealCamera(64, 64, 0.1)
+    ems = [Emitter2DFit{Float64}(x, 1.0, ph, 5.0, 0.01, 0.01, 50.0, 2.0; frame = f)
+           for (x, ph, f) in ((0.5, 500.0, 1), (1.5, 1500.0, 2), (2.5, 2500.0, 3))]
+    s = BasicSMLD(ems, cam, 3, 1)
+    xs(r) = [e.x for e in r.emitters]
+    ref = BasicSMLD(ems[2:3], cam, 3, 1)
+    want = [1.5, 2.5]
+
+    # `e` bound by a lambda, generator, comprehension, loop, `let` or `catch` is its own inside;
+    # outside, `e` is the emitter, whatever caller `e` is defined
+    for caller_e in (nothing, ems[3], ems[1])
+        e = caller_e
+        @test xs(@filter(s, e.photons > 0.5 * maximum(e.photons for e in ems))) == want
+        @test xs(@filter(s, e.frame in [e.frame for e in ref.emitters])) == want
+        @test xs(@filter(s, begin n = 0; for e in ems; n += e.x > 2; end; n == 1 && e.x > 1 end)) == want
+        @test xs(@filter(s, let e = ems[1]; e.x < 1 end && e.x > 1)) == want
+        @test xs(@filter(s, any(e -> e.x > 2, ems) && e.x > 1)) == want
+        # (`catch e` assigns an enclosing `e`, as in Julia, so read `e.x` first)
+        @test xs(@filter(s, e.x > 1 && try error("no") catch e; e isa ErrorException end)) == want
+        # a bare `e` is the emitter too
+        @test xs(@filter(s, e.x > 1 && bright_emitter(e))) == want
+        # the iterator and a `let` value are outside the construct's `e`
+        @test xs(@filter(s, any(e > 1 for e in (e.x,)))) == want
+        @test xs(@filter(s, let e = e.x; e > 1 end)) == want
+        # an assignment to `e` changes `e` from there on, as in Julia
+        @test xs(@filter(s, e.x > 1 && (e = 3; e == 3))) == want
+        @test xs(@filter(s, begin e = (x = 9,); e.x > 1 end)) == [0.5, 1.5, 2.5]
+        # `$e` is the caller's
+        caller_e === nothing || @test length(@filter(s, x == $e.x)) == 1
+    end
+
+    # A condition written as an assignment is refused when the macro expands
+    @test_throws ArgumentError macroexpand(@__MODULE__, :(@filter(s, dataset = 1)))
+    @test all(em -> em.dataset == 1, ems)
+
+    # Positions that are not names stay as written
+    atol = 0.6
+    @test xs(@filter(s, isapprox(x, 1.0; atol = atol))) == [0.5, 1.5]
+    @test xs(@filter(s, (photons = photons, x = x).photons > 1000)) == want
+    @test xs(@filter(s, @isdefined(x) && x > 1)) == want
+    @test xs(@filter(s, any((v::Float64) -> v > Float64(1), (x,)))) == want
+    @test xs(@filter(s, x isa Real && any(((v::T) where {T<:Real}) -> v > 1, (x,)))) == want
+    @test xs(@filter(s, ((@nospecialize(v)) -> v > 1)(x))) == want
+    @test xs(@filter(s, begin global _filter_gg; frame < _filter_gg end)) == [0.5]
+    zz = 5
+    @test xs(@filter(s, begin for outer zz in 1:2; end; x > zz - 1 end)) == want
+    @test zz == 5
+    @test xs(@filter(s, begin f(v::T) where {T} = v > zero(T); f(x - 1) end)) == want
+end
